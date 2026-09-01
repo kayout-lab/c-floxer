@@ -953,6 +953,47 @@ textarea.autogrow.grande{height:190px!important;overflow:auto;resize:vertical}
 .stav-i.err .dot{background:var(--err)} .stav-i.warn .dot{background:var(--warn)}
 .stav-i.info .dot{background:var(--info)} .stav-i.ok .dot{background:var(--ok)}
 table.grid select{font-size:11px}
+
+/* ---------- sessão compartilhada ---------- */
+.sess-painel{position:fixed;right:16px;bottom:16px;z-index:120;display:none;width:262px;
+  background:#fff;border:1px solid var(--line2);border-radius:13px;
+  box-shadow:0 12px 38px rgba(35,48,41,.22);overflow:hidden}
+.sess-painel.show{display:block}
+.sess-cab{display:flex;align-items:center;gap:7px;padding:10px 12px;background:var(--musgo-0);
+  border-bottom:1px solid var(--line)}
+.sess-cab b{font-size:12.3px;flex:0 0 auto}
+.sess-pt{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:0 0 8px;
+  box-shadow:0 0 0 3px rgba(47,133,90,.18);animation:sessPulse 2s infinite}
+@keyframes sessPulse{0%,100%{opacity:1}50%{opacity:.45}}
+.sess-cod{margin-left:auto;font-family:Consolas,monospace;font-size:11.5px;font-weight:800;
+  background:var(--acao);color:#fff;border-radius:6px;padding:2px 8px;cursor:pointer;letter-spacing:1px}
+.sess-cod:hover{background:var(--acao-h)}
+.sess-x{border:0;background:transparent;cursor:pointer;color:var(--txt3);font-weight:800;font-size:12px;padding:0 2px}
+.sess-x:hover{color:var(--err)}
+.sess-lista{padding:7px 10px;max-height:210px;overflow-y:auto}
+.sess-p{display:flex;align-items:center;gap:8px;padding:5px 4px;font-size:12px}
+.sess-p.ligando{opacity:.55}
+.sess-bola{width:10px;height:10px;border-radius:50%;flex:0 0 10px;box-shadow:0 0 0 2px #fff,0 0 0 3px rgba(35,48,41,.10)}
+.sess-nome{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess-tag{font-size:9.5px;color:var(--txt3);font-weight:700;white-space:nowrap}
+.sess-rod{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--line);
+  font-size:10.5px;color:var(--txt3);font-weight:700}
+.sess-link{margin-left:auto;border:0;background:transparent;color:var(--acao);cursor:pointer;
+  font-weight:800;font-size:11px}
+.sess-link:hover{text-decoration:underline}
+.sess-opcoes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sess-op{border:1px solid var(--line2);background:#fff;border-radius:11px;padding:14px 13px;cursor:pointer;
+  text-align:left;display:flex;flex-direction:column;gap:4px;transition:.12s}
+.sess-op:hover,.sess-op.on{border-color:var(--acao);box-shadow:0 4px 14px rgba(35,48,41,.12)}
+.sess-op-ico{width:28px;height:28px;border-radius:8px;background:var(--musgo-1);color:var(--acao);
+  display:flex;align-items:center;justify-content:center;font-size:13px;margin-bottom:3px}
+.sess-op b{font-size:12.6px}
+.sess-op span:not(.sess-op-ico){font-size:11px;color:var(--txt3);line-height:1.45}
+.sess-box{border:1px solid var(--line2);border-radius:11px;padding:14px;background:var(--musgo-0)}
+.sess-box-tit{font-size:10px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;color:var(--txt3)}
+.sess-cod-grande{font-family:Consolas,monospace;font-size:30px;font-weight:800;letter-spacing:6px;
+  color:var(--acao);margin:6px 0 0}
+#btnSessao.on{background:rgba(47,133,90,.3);border-color:rgba(47,133,90,.55)}
 </style>
 </head>
 <body>
@@ -1540,6 +1581,9 @@ function salvarPaginaAtual(){
 function carregarPagina(i){
   garantirPaginas();
   if(i<0||i>=model.paginas.length) return false;
+  if(typeof ss!=='undefined' && ss.ativa && i!==model.paginaAtual){
+    toast('A sessão compartilha apenas a página aberta — os outros continuam na página anterior');
+  }
   salvarPaginaAtual();
   model.paginaAtual=i;
   const p=model.paginas[i];
@@ -2474,6 +2518,8 @@ function render(){
   s+= (model.sugestoes||[]).filter(g=>g.fantasma).map(fantasmaSVG).join('');
   s+= (typeof marcadoresRevisaoSVG==='function'? marcadoresRevisaoSVG() : '');
   s+= (typeof propostasSVG==='function'? propostasSVG() : '');
+  s+= (typeof bloqueiosSVG==='function'? bloqueiosSVG() : '');
+  s+= (typeof cursoresSVG==='function'? cursoresSVG() : '');
 
   /* guias de alinhamento */
   if(guias){
@@ -3761,6 +3807,10 @@ function initCanvas(){
         }));
         alvos=alvos.concat(extras);
       }
+      if(typeof bloqueadoPorOutro==='function'){
+        const preso=alvos.map(n=>bloqueadoPorOutro(n.id)).find(Boolean);
+        if(preso){ toast(`“${preso.nome}” está editando este elemento`,'err'); drag=null; return; }
+      }
       drag={t:'move', sx:p.x, sy:p.y, itens:alvos.map(n=>({id:n.id,ox:n.x,oy:n.y})), moveu:false};
     }
     fecharBarras(); render();
@@ -4201,6 +4251,11 @@ function caixaDoTexto(o){
 }
 function editLabel(id, opts){
   const o=byId(id); if(!o) return false;
+  if(typeof bloqueadoPorOutro==='function'){
+    const preso=bloqueadoPorOutro(id);
+    if(preso){ toast(`“${preso.nome}” está editando este elemento`,'err'); return false; }
+  }
+  if(typeof tomarPosse==='function') tomarPosse(id);
   if(o.type==='image'){ editarLegenda(o); return true; }
   opts=opts||{};
   fecharEdicaoAberta(true);
@@ -4247,6 +4302,7 @@ function editLabel(id, opts){
     ed.style.display='none'; ed.style.height=''; ed.style.minHeight='';
     ed.onblur=null; ed.onkeydown=null; ed.oninput=null;
     edicaoAtiva=null;
+    if(typeof liberarPosse==='function') liberarPosse(id);
     render(); renderProps(); renderPad();
     if(seguir){
       const prox=proximoElemento(o);
@@ -9381,8 +9437,13 @@ function formaMercadoSVG(n, st, sw, fill, escF){
     s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h/2}" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
     const pct=Math.max(0,Math.min(100,parseFloat(n.progresso)||0))/100;
     if(pct>0) s+=`<rect x="${x}" y="${y}" width="${w*pct}" height="${h}" rx="${h/2}" fill="${st}" opacity=".30"/>`;
-    s+=txt(n.name, cx, cy, Math.floor((w-24)/6), 1, 10.8, 700);
-    if(pct>0) s+=textBlock(Math.round(pct*100)+'%', x+w-4, y-9, 6, 1, 9, 800, st,'end',null,escF);
+    /* o nome ocupa a barra; o percentual fica num selo à direita, dentro dela */
+    const largPct = pct>0 ? 40 : 0;
+    s+=txt(n.name, x+(w-largPct)/2, cy, Math.max(6,Math.floor((w-largPct-20)/6)), 1, 10.8, 700);
+    if(pct>0){
+      s+=`<rect x="${x+w-38}" y="${cy-9}" width="32" height="18" rx="9" fill="${st}" opacity=".18" style="pointer-events:none"/>`;
+      s+=`<text x="${x+w-22}" y="${cy}" text-anchor="middle" dominant-baseline="middle" font-size="${8.8*escF}" font-weight="800" fill="${st}" style="pointer-events:none">${Math.round(pct*100)}%</text>`;
+    }
   }
   else if(t==='cronResumo'){
     s+=`<path d="M${x} ${y+8}h${w}v${h-16}l-8 8h-${w-16}l-8-8z" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
@@ -9392,7 +9453,11 @@ function formaMercadoSVG(n, st, sw, fill, escF){
   else if(t==='cronMarco'){
     s+=`<polygon points="${cx},${y+6} ${x+w-6},${cy} ${cx},${y+h-6} ${x+6},${cy}" fill="${fill}" stroke="${st}" stroke-width="${sw}" stroke-linejoin="round"/>`;
     s+=`<polygon points="${cx},${y+16} ${x+w-16},${cy} ${cx},${y+h-16} ${x+16},${cy}" fill="${st}" opacity=".3"/>`;
-    s+=textBlock(n.name, cx, y+h+14, Math.max(12,Math.floor(w/4)), 2, 10.5, 750, PRETO,'middle',n.id,escF);
+    if(n.name){
+      const lw=Math.min(200, String(n.name).length*5.9*escF+16);
+      s+=`<rect x="${cx-lw/2}" y="${y+h+4}" width="${lw}" height="${19*escF}" rx="${9*escF}" fill="#fff" stroke="${st}" stroke-width="1" opacity=".96" style="pointer-events:none"/>`;
+      s+=textBlock(n.name, cx, y+h+13.5*escF, Math.max(12,Math.floor(lw/5.9)), 1, 9.8, 750, PRETO,'middle',n.id,escF);
+    }
   }
   else if(t==='cronHoje'){
     s+=`<line x1="${cx}" y1="${y+14}" x2="${cx}" y2="${y+h}" stroke="${st}" stroke-width="2" stroke-dasharray="6,4"/>`;
@@ -9490,7 +9555,11 @@ function formaMercadoSVG(n, st, sw, fill, escF){
     [[0.12,18],[0.46,14],[0.80,-4]].forEach(([fx,dy])=>{
       s+=`<circle cx="${x+w*fx}" cy="${cy+dy}" r="4" fill="${st}"/>`;
     });
-    s+=textBlock(n.name, cx, y+h-11, Math.floor(w/5.4), 1, 10, 700, PRETO,'middle',n.id,escF);
+    if(n.name){
+      const lw=Math.min(w-14, String(n.name).length*5.9*escF+18);
+      s+=`<rect x="${cx-lw/2}" y="${y+h-20}" width="${lw}" height="${17*escF}" rx="${8*escF}" fill="#fff" opacity=".92" style="pointer-events:none"/>`;
+      s+=textBlock(n.name, cx, y+h-11.5, Math.max(8,Math.floor(lw/5.9)), 1, 10, 700, PRETO,'middle',n.id,escF);
+    }
   }
   else if(t==='dtProto'){
     s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="${fill}" stroke="${st}" stroke-width="${sw}" stroke-dasharray="7,4"/>`;
@@ -11007,6 +11076,7 @@ function init(){
 
   window.addEventListener('beforeunload',e=>{ if(model.nodes.length&&sujo){ e.preventDefault(); e.returnValue=''; } });
   setModeUI(); atualizarSelInfo();
+  if(typeof initSessao==='function') initSessao();
   initOnboarding();
   setTimeout(()=>{
     if(existeRascunho()&&!model.nodes.length){
@@ -12385,4 +12455,1235 @@ function initV23(){
 })();
 
 </script>
+<script>
+/* =========================================================================
+   C-Flow v24 — SESSÃO COMPARTILHADA (até 10 participantes)
+   Conexão direta entre navegadores (WebRTC). Nada é enviado a servidor
+   próprio: apenas a sinalização inicial passa por um intermediário, e há
+   o modo manual para redes que bloqueiam qualquer conexão persistente.
+   ========================================================================= */
+
+const SESSAO_MAX = 10;                 /* teto de participantes por sala */
+const SESSAO_CHAVE = 'cflow.sessao.v1';
+
+/* estado da sessão */
+let ss = {
+  ativa:false, sala:'', eu:null, host:false,
+  pares:{},                 /* id -> {pc, canal, nome, cor, cursor, editando, latencia} */
+  bloqueios:{},             /* elementoId -> {por, nome, quando} */
+  versoes:{},               /* elementoId -> {v, por} */
+  cursores:{},              /* id -> {x,y,nome,cor,quando} */
+  fila:[],                  /* alterações a transmitir, agrupadas */
+  timerFila:null,
+  imagensPedidas:{},        /* assinatura -> true, evita pedir duas vezes */
+  sinalizacao:null,
+  modoManual:false,
+  ecoando:false             /* trava reentrância ao aplicar o que chega */
+};
+
+/* paleta de cores dos participantes — distinguíveis entre si */
+const CORES_PARES = ['#C08A3E','#2C6E9E','#2F855A','#8E3061','#5B4B9E',
+                     '#B7791F','#1F6B7D','#C0392B','#4F6355','#7A5C3E'];
+
+function idAleatorio(n){
+  const a='abcdefghijkmnopqrstuvwxyz23456789';
+  let s=''; for(let i=0;i<(n||6);i++) s+=a[Math.floor(Math.random()*a.length)];
+  return s;
+}
+function nomeParticipante(){
+  try{
+    const g=localStorage.getItem('cflow.meuNome');
+    if(g) return g;
+  }catch(e){}
+  return (typeof revisao!=='undefined' && revisao.autor) ? revisao.autor : 'Participante';
+}
+function definirMeuNome(n){
+  try{ localStorage.setItem('cflow.meuNome', n); }catch(e){}
+  if(ss.eu) ss.eu.nome=n;
+}
+function corDoPar(i){ return CORES_PARES[i % CORES_PARES.length]; }
+function contarPares(){ return Object.keys(ss.pares).length; }
+function totalNaSala(){ return contarPares() + (ss.ativa?1:0); }
+
+/* =========================================================================
+   1) VERSÃO POR ELEMENTO — resolução determinística de conflito
+   Cada alteração carrega um contador e a identidade de quem alterou.
+   Quem tem a versão maior vence; empate desempata pelo identificador.
+   ========================================================================= */
+function versaoDe(id){ return ss.versoes[id] || {v:0, por:''}; }
+function proximaVersao(id){
+  const a=versaoDe(id);
+  const nova={v:a.v+1, por: ss.eu?ss.eu.id:'local'};
+  ss.versoes[id]=nova;
+  return nova;
+}
+/* devolve verdadeiro quando a alteração que chegou deve ser aplicada */
+function vencedora(id, recebida){
+  const atual=versaoDe(id);
+  if(recebida.v > atual.v) return true;
+  if(recebida.v < atual.v) return false;
+  return String(recebida.por) > String(atual.por);   /* empate: id maior vence */
+}
+
+/* =========================================================================
+   2) TRAVA DE EDIÇÃO — quem está mexendo anuncia posse temporária
+   ========================================================================= */
+const BLOQUEIO_MS = 8000;              /* posse expira sozinha, evita travar */
+function bloqueadoPorOutro(id){
+  const b=ss.bloqueios[id];
+  if(!b) return null;
+  if(Date.now()-b.quando > BLOQUEIO_MS){ delete ss.bloqueios[id]; return null; }
+  if(ss.eu && b.por===ss.eu.id) return null;
+  return b;
+}
+function tomarPosse(ids){
+  if(!ss.ativa) return true;
+  const lista=Array.isArray(ids)?ids:[ids];
+  const travado=lista.map(bloqueadoPorOutro).find(Boolean);
+  if(travado){
+    toast(`“${travado.nome}” está editando este elemento`,'err');
+    return false;
+  }
+  lista.forEach(id=>{ ss.bloqueios[id]={por:ss.eu.id, nome:ss.eu.nome, quando:Date.now()}; });
+  transmitir({t:'posse', ids:lista, quando:Date.now()});
+  return true;
+}
+function liberarPosse(ids){
+  if(!ss.ativa) return;
+  const lista=Array.isArray(ids)?ids:[ids];
+  lista.forEach(id=>{ if(ss.bloqueios[id] && ss.eu && ss.bloqueios[id].por===ss.eu.id) delete ss.bloqueios[id]; });
+  transmitir({t:'libera', ids:lista});
+}
+function limparPossesExpiradas(){
+  const agora=Date.now();
+  Object.keys(ss.bloqueios).forEach(id=>{
+    if(agora-ss.bloqueios[id].quando > BLOQUEIO_MS) delete ss.bloqueios[id];
+  });
+}
+
+/* =========================================================================
+   3) IMAGENS FORA DO CANAL — assinatura em vez do conteúdo
+   Transmitir base64 a cada tecla estouraria o limite da conexão.
+   ========================================================================= */
+const PEDACO = 14000;                  /* limite seguro por mensagem */
+let _imgCache = {};                    /* assinatura -> dataURL */
+let _imgRecebendo = {};                /* assinatura -> {partes:[], total} */
+
+function assinaturaImagem(src){
+  if(!src) return '';
+  /* hash barato e estável: tamanho + amostras ao longo da cadeia */
+  let h=5381;
+  const passo=Math.max(1, Math.floor(src.length/512));
+  for(let i=0;i<src.length;i+=passo) h=((h<<5)+h+src.charCodeAt(i))|0;
+  return 'img'+src.length.toString(36)+'_'+(h>>>0).toString(36);
+}
+/* substitui o conteúdo pela assinatura antes de transmitir */
+function enxugarParaRede(obj){
+  const c=JSON.parse(JSON.stringify(obj));
+  const trocar=n=>{
+    if(n && n.src && String(n.src).length>400){
+      const a=assinaturaImagem(n.src);
+      _imgCache[a]=n.src;
+      n._imgRef=a;
+      delete n.src;
+    }
+  };
+  if(Array.isArray(c)) c.forEach(trocar); else trocar(c);
+  return c;
+}
+/* devolve o conteúdo quando já o temos; senão, pede ao par */
+function reidratar(n, deQuem){
+  if(!n || !n._imgRef) return n;
+  const a=n._imgRef;
+  if(_imgCache[a]){ n.src=_imgCache[a]; delete n._imgRef; return n; }
+  if(!ss.imagensPedidas[a]){
+    ss.imagensPedidas[a]=true;
+    enviarPara(deQuem, {t:'pedeImg', ref:a});
+  }
+  return n;   /* fica sem imagem até chegar; o desenho mostra o espaço vazio */
+}
+function enviarImagemEmPedacos(paraId, ref){
+  const src=_imgCache[ref];
+  if(!src) return;
+  const total=Math.ceil(src.length/PEDACO);
+  for(let i=0;i<total;i++){
+    enviarPara(paraId, {t:'img', ref, i, total, d:src.slice(i*PEDACO,(i+1)*PEDACO)});
+  }
+}
+function receberPedacoImagem(m){
+  const r=_imgRecebendo[m.ref] || (_imgRecebendo[m.ref]={partes:[], total:m.total});
+  r.partes[m.i]=m.d;
+  const completo=r.partes.filter(Boolean).length===r.total;
+  if(!completo) return;
+  const src=r.partes.join('');
+  _imgCache[m.ref]=src;
+  delete _imgRecebendo[m.ref];
+  delete ss.imagensPedidas[m.ref];
+  /* aplica em todos os elementos que aguardavam esta imagem */
+  let n=0;
+  model.nodes.forEach(o=>{ if(o._imgRef===m.ref){ o.src=src; delete o._imgRef; n++; } });
+  if(n) render();
+}
+
+/* =========================================================================
+   4) TRANSPORTE — WebRTC direto, com sinalização configurável
+   ========================================================================= */
+const ICE_PADRAO = [
+  {urls:'stun:stun.l.google.com:19302'},
+  {urls:'stun:stun1.l.google.com:19302'}
+];
+function lerConfigSessao(){
+  try{ return JSON.parse(localStorage.getItem(SESSAO_CHAVE)||'{}'); }catch(e){ return {}; }
+}
+function salvarConfigSessao(c){
+  try{ localStorage.setItem(SESSAO_CHAVE, JSON.stringify(c)); }catch(e){}
+}
+
+function criarConexao(paraId, iniciador){
+  const cfg=lerConfigSessao();
+  const pc=new RTCPeerConnection({iceServers: cfg.ice || ICE_PADRAO});
+  const par={pc, canal:null, nome:'…', cor:corDoPar(contarPares()), pronto:false};
+  ss.pares[paraId]=par;
+
+  const ligarCanal=(canal)=>{
+    par.canal=canal;
+    canal.onopen=()=>{
+      par.pronto=true;
+      enviarPara(paraId, {t:'ola', id:ss.eu.id, nome:ss.eu.nome, cor:ss.eu.cor});
+      if(ss.host) enviarPara(paraId, {t:'estado', modelo:enxugarParaRede(estadoParaRede()), versoes:ss.versoes});
+      atualizarPainelSessao();
+      toast('Participante conectado','ok');
+    };
+    canal.onmessage=ev=>{ try{ receber(JSON.parse(ev.data), paraId); }catch(e){} };
+    canal.onclose=()=>{ removerPar(paraId); };
+  };
+
+  if(iniciador){
+    ligarCanal(pc.createDataChannel('cflow',{ordered:true}));
+  } else {
+    pc.ondatachannel=ev=>ligarCanal(ev.channel);
+  }
+  pc.onicecandidate=ev=>{
+    if(ev.candidate) sinalizar({t:'ice', para:paraId, de:ss.eu.id, sala:ss.sala, c:ev.candidate});
+  };
+  pc.onconnectionstatechange=()=>{
+    if(['failed','closed','disconnected'].includes(pc.connectionState)) removerPar(paraId);
+  };
+  return par;
+}
+function removerPar(id){
+  const p=ss.pares[id];
+  if(!p) return;
+  try{ if(p.canal) p.canal.close(); if(p.pc) p.pc.close(); }catch(e){}
+  const nome=p.nome;
+  delete ss.pares[id];
+  delete ss.cursores[id];
+  /* solta o que aquele participante travou */
+  Object.keys(ss.bloqueios).forEach(k=>{ if(ss.bloqueios[k].por===id) delete ss.bloqueios[k]; });
+  atualizarPainelSessao(); render();
+  if(nome && nome!=='…') toast(`“${nome}” saiu da sessão`);
+}
+function enviarPara(id, msg){
+  const p=ss.pares[id];
+  if(!p || !p.canal || p.canal.readyState!=='open') return false;
+  try{ p.canal.send(JSON.stringify(msg)); return true; }catch(e){ return false; }
+}
+function transmitir(msg, exceto){
+  if(!ss.ativa) return 0;
+  let n=0;
+  Object.keys(ss.pares).forEach(id=>{ if(id!==exceto && enviarPara(id,msg)) n++; });
+  return n;
+}
+
+/* ---- sinalização: servidor público, próprio, ou manual ---- */
+function sinalizar(msg){
+  if(ss.modoManual){ acumularManual(msg); return; }
+  const s=ss.sinalizacao;
+  if(s && s.readyState===1){ try{ s.send(JSON.stringify(msg)); }catch(e){} }
+}
+function abrirSinalizacao(url, aoPronto, aoErro){
+  try{
+    const s=new WebSocket(url);
+    ss.sinalizacao=s;
+    s.onopen=()=>{ s.send(JSON.stringify({t:'entrar', sala:ss.sala, id:ss.eu.id})); if(aoPronto) aoPronto(); };
+    s.onmessage=ev=>{ try{ tratarSinal(JSON.parse(ev.data)); }catch(e){} };
+    s.onerror=()=>{ if(aoErro) aoErro(); };
+    s.onclose=()=>{ ss.sinalizacao=null; };
+    return s;
+  }catch(e){ if(aoErro) aoErro(); return null; }
+}
+async function tratarSinal(m){
+  if(!m || m.sala!==ss.sala || m.de===ss.eu.id) return;
+  if(m.para && m.para!==ss.eu.id) return;
+  if(m.t==='entrou'){
+    if(totalNaSala()>=SESSAO_MAX){ toast('Sala cheia — limite de '+SESSAO_MAX+' participantes','err'); return; }
+    const par=criarConexao(m.de, true);
+    const oferta=await par.pc.createOffer();
+    await par.pc.setLocalDescription(oferta);
+    sinalizar({t:'oferta', para:m.de, de:ss.eu.id, sala:ss.sala, sdp:par.pc.localDescription});
+  }
+  else if(m.t==='oferta'){
+    if(totalNaSala()>=SESSAO_MAX){ return; }
+    const par=ss.pares[m.de] || criarConexao(m.de, false);
+    await par.pc.setRemoteDescription(m.sdp);
+    const resp=await par.pc.createAnswer();
+    await par.pc.setLocalDescription(resp);
+    sinalizar({t:'resposta', para:m.de, de:ss.eu.id, sala:ss.sala, sdp:par.pc.localDescription});
+  }
+  else if(m.t==='resposta'){
+    const par=ss.pares[m.de];
+    if(par && par.pc.signalingState!=='stable') await par.pc.setRemoteDescription(m.sdp);
+  }
+  else if(m.t==='ice'){
+    const par=ss.pares[m.de];
+    if(par){ try{ await par.pc.addIceCandidate(m.c); }catch(e){} }
+  }
+}
+
+/* =========================================================================
+   5) SINCRONIZAÇÃO — o que entra e o que sai
+   ========================================================================= */
+/* apenas a página aberta é compartilhada; trocar de página é individual */
+function estadoParaRede(){
+  return {
+    nodes: model.nodes,
+    edges: model.edges,
+    pools: model.pools,
+    meta:  model.meta,
+    comentarios: model.comentarios || []
+  };
+}
+function aplicarEstadoDaRede(e, versoes){
+  ss.ecoando=true;
+  try{
+    model.nodes = (e.nodes||[]).map(n=>reidratar(n, null));
+    model.edges = e.edges||[];
+    model.pools = e.pools||[];
+    model.comentarios = e.comentarios||[];
+    if(e.meta) Object.assign(model.meta, e.meta);
+    if(versoes) ss.versoes=versoes;
+    if(typeof atualizarNomeTopo==='function') atualizarNomeTopo();
+    render(); renderProps(); atualizarSelInfo();
+  } finally { ss.ecoando=false; }
+}
+/* agrupa as alterações e transmite em lote, para não inundar o canal */
+function marcarAlterado(ids, motivo){
+  if(!ss.ativa || ss.ecoando) return;
+  const lista=Array.isArray(ids)?ids:[ids];
+  lista.forEach(id=>{ if(id && !ss.fila.includes(id)) ss.fila.push(id); });
+  if(ss.timerFila) return;
+  ss.timerFila=setTimeout(()=>{ ss.timerFila=null; despacharFila(motivo); }, 90);
+}
+function despacharFila(){
+  if(!ss.ativa || !ss.fila.length) return;
+  const ids=ss.fila.slice(); ss.fila=[];
+  const nos=[], setas=[], piscinas=[], removidos=[];
+  ids.forEach(id=>{
+    const o=byId(id);
+    if(!o){ removidos.push(id); return; }
+    const v=proximaVersao(id);
+    const c=enxugarParaRede(o); c._v=v;
+    if(o.source) setas.push(c);
+    else if(o.lanes) piscinas.push(c);
+    else nos.push(c);
+  });
+  transmitir({t:'delta', nos, setas, piscinas, removidos, de:ss.eu.id});
+}
+/* transmite o modelo inteiro — usado quando a mudança é estrutural */
+function transmitirTudo(){
+  if(!ss.ativa || ss.ecoando) return;
+  transmitir({t:'estado', modelo:enxugarParaRede(estadoParaRede()), versoes:ss.versoes});
+}
+
+function receber(m, deQuem){
+  if(!m || !m.t) return;
+  const par=ss.pares[deQuem];
+  switch(m.t){
+    case 'ola':
+      if(par){ par.nome=m.nome||'Participante'; par.cor=m.cor||par.cor; }
+      atualizarPainelSessao(); render();
+      break;
+    case 'estado':
+      aplicarEstadoDaRede(m.modelo, m.versoes);
+      break;
+    case 'delta':
+      aplicarDelta(m, deQuem);
+      break;
+    case 'cursor':
+      ss.cursores[deQuem]={x:m.x, y:m.y, nome:(par&&par.nome)||'', cor:(par&&par.cor)||'#888', quando:Date.now()};
+      render();
+      break;
+    case 'posse':
+      (m.ids||[]).forEach(id=>{ ss.bloqueios[id]={por:deQuem, nome:(par&&par.nome)||'Alguém', quando:m.quando||Date.now()}; });
+      render();
+      break;
+    case 'libera':
+      (m.ids||[]).forEach(id=>{ if(ss.bloqueios[id] && ss.bloqueios[id].por===deQuem) delete ss.bloqueios[id]; });
+      render();
+      break;
+    case 'pedeImg':
+      enviarImagemEmPedacos(deQuem, m.ref);
+      break;
+    case 'img':
+      receberPedacoImagem(m);
+      break;
+    case 'saiu':
+      removerPar(deQuem);
+      break;
+    case 'nome':
+      if(par) par.nome=m.nome;
+      atualizarPainelSessao(); render();
+      break;
+  }
+}
+function aplicarDelta(m, deQuem){
+  ss.ecoando=true;
+  let mudou=false;
+  try{
+    (m.removidos||[]).forEach(id=>{
+      const antes=model.nodes.length+model.edges.length+model.pools.length;
+      model.nodes=model.nodes.filter(n=>n.id!==id);
+      model.edges=model.edges.filter(e=>e.id!==id && e.source!==id && e.target!==id);
+      model.pools=model.pools.filter(p=>p.id!==id);
+      if(antes!==model.nodes.length+model.edges.length+model.pools.length) mudou=true;
+    });
+    const aplicar=(lista, colecao)=>{
+      (lista||[]).forEach(c=>{
+        const v=c._v||{v:1,por:deQuem};
+        if(!vencedora(c.id, v)) return;          /* nossa versão é mais nova */
+        ss.versoes[c.id]=v;
+        delete c._v;
+        reidratar(c, deQuem);
+        const i=colecao.findIndex(x=>x.id===c.id);
+        if(i>=0){
+          /* preserva a imagem já baixada, se o par mandou só a assinatura */
+          if(!c.src && colecao[i].src && c._imgRef===assinaturaImagem(colecao[i].src)){
+            c.src=colecao[i].src; delete c._imgRef;
+          }
+          colecao[i]=c;
+        }
+        else colecao.push(c);
+        mudou=true;
+      });
+    };
+    aplicar(m.nos, model.nodes);
+    aplicar(m.setas, model.edges);
+    aplicar(m.piscinas, model.pools);
+  } finally { ss.ecoando=false; }
+  if(mudou){ render(); renderProps(); atualizarSelInfo(); }
+}
+
+/* =========================================================================
+   6) CURSORES E PRESENÇA NO DESENHO
+   ========================================================================= */
+const CURSOR_VIDA = 6000;
+function cursoresSVG(){
+  if(!ss.ativa) return '';
+  const agora=Date.now();
+  let s='';
+  Object.keys(ss.cursores).forEach(id=>{
+    const c=ss.cursores[id];
+    if(agora-c.quando > CURSOR_VIDA) return;
+    const larg=Math.max(34, String(c.nome||'').length*5.6+18);
+    s+=`<g style="pointer-events:none" opacity="${Math.max(.35, 1-(agora-c.quando)/CURSOR_VIDA)}">`
+      +`<path d="M${c.x} ${c.y}l0 16l4.4-4.4l3 6.6l3.4-1.6l-3-6.4l6.2-.4z" fill="${c.cor}" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>`
+      +`<rect x="${c.x+14}" y="${c.y+14}" width="${larg}" height="17" rx="8" fill="${c.cor}"/>`
+      +`<text x="${c.x+14+larg/2}" y="${c.y+22.5}" text-anchor="middle" dominant-baseline="middle" font-size="9.6" font-weight="800" fill="#fff">${esc(c.nome||'')}</text>`
+      +`</g>`;
+  });
+  return s;
+}
+/* marca visual nos elementos que outro participante está editando */
+function bloqueiosSVG(){
+  if(!ss.ativa) return '';
+  limparPossesExpiradas();
+  let s='';
+  Object.keys(ss.bloqueios).forEach(id=>{
+    const b=ss.bloqueios[id];
+    if(ss.eu && b.por===ss.eu.id) return;
+    const o=byId(id);
+    if(!o || o.x==null) return;
+    const par=ss.pares[b.por];
+    const cor=(par&&par.cor)||'#C08A3E';
+    s+=`<g style="pointer-events:none">`
+      +`<rect x="${o.x-7}" y="${o.y-7}" width="${o.w+14}" height="${o.h+14}" rx="9" fill="none" stroke="${cor}" stroke-width="2.2" stroke-dasharray="7,4"/>`
+      +`<rect x="${o.x-7}" y="${o.y-25}" width="${Math.max(52,String(b.nome).length*5.6+22)}" height="17" rx="8" fill="${cor}"/>`
+      +`<text x="${o.x-7+Math.max(52,String(b.nome).length*5.6+22)/2}" y="${o.y-16.5}" text-anchor="middle" dominant-baseline="middle" font-size="9.4" font-weight="800" fill="#fff">✎ ${esc(b.nome)}</text>`
+      +`</g>`;
+  });
+  return s;
+}
+/* envio contido da posição do cursor */
+let _ultimoCursor=0;
+function enviarCursor(p){
+  if(!ss.ativa || !p) return;
+  const agora=Date.now();
+  if(agora-_ultimoCursor < 70) return;      /* no máximo ~14 por segundo */
+  _ultimoCursor=agora;
+  transmitir({t:'cursor', x:Math.round(p.x), y:Math.round(p.y)});
+}
+
+/* =========================================================================
+   7) ENTRAR, CRIAR E SAIR
+   ========================================================================= */
+function iniciarSessao(sala, comoHost){
+  if(ss.ativa) return;
+  const cfg=lerConfigSessao();
+  ss.sala = sala || idAleatorio(6);
+  ss.eu   = {id: idAleatorio(8), nome: nomeParticipante(), cor: CORES_PARES[0]};
+  ss.host = !!comoHost;
+  ss.ativa= true;
+  ss.pares={}; ss.cursores={}; ss.bloqueios={}; ss.versoes={};
+  ss.modoManual = cfg.modo==='manual';
+
+  if(!ss.modoManual){
+    const url=(cfg.servidor||'wss://y-webrtc-eu.fly.dev').trim();
+    abrirSinalizacao(url,
+      ()=>{ sinalizar({t:'entrou', de:ss.eu.id, sala:ss.sala}); },
+      ()=>{ toast('Não foi possível conectar ao servidor de sinalização — use o modo manual','err');
+            atualizarPainelSessao(); });
+  }
+  /* toda alteração local passa a ser transmitida */
+  ligarEspiaoDeAlteracoes();
+  montarPainelSessao();
+  atualizarPainelSessao();
+  render();
+  toast(comoHost?`Sessão criada — código ${ss.sala}`:'Entrando na sessão…','ok');
+}
+function sairSessao(silencioso){
+  if(!ss.ativa) return;
+  transmitir({t:'saiu'});
+  Object.keys(ss.pares).forEach(id=>{
+    try{ const p=ss.pares[id]; if(p.canal) p.canal.close(); if(p.pc) p.pc.close(); }catch(e){}
+  });
+  if(ss.sinalizacao){ try{ ss.sinalizacao.close(); }catch(e){} }
+  ss.ativa=false; ss.pares={}; ss.cursores={}; ss.bloqueios={}; ss.sinalizacao=null;
+  const p=$('#sessaoPainel'); if(p) p.classList.remove('show');
+  const b=$('#btnSessao'); if(b) b.classList.remove('on');
+  render();
+  if(!silencioso) toast('Você saiu da sessão compartilhada');
+}
+
+/* =========================================================================
+   8) MODO MANUAL — funciona mesmo sem servidor de sinalização
+   ========================================================================= */
+let _manualAcumulado=[];
+function acumularManual(msg){
+  _manualAcumulado.push(msg);
+  const cx=$('#sessCodigo');
+  if(cx) cx.value=btoa(unescape(encodeURIComponent(JSON.stringify(_manualAcumulado))));
+}
+function lerCodigoManual(txt){
+  try{
+    const lista=JSON.parse(decodeURIComponent(escape(atob(String(txt).trim()))));
+    if(!Array.isArray(lista)) throw new Error('formato');
+    lista.forEach(m=>tratarSinal(m));
+    toast(`${lista.length} mensagem(ns) processada(s)`,'ok');
+    return true;
+  }catch(e){ toast('Código de sessão inválido','err'); return false; }
+}
+
+/* =========================================================================
+   9) PAINEL DA SESSÃO
+   ========================================================================= */
+function montarPainelSessao(){
+  if($('#sessaoPainel')) return;
+  const d=document.createElement('div');
+  d.id='sessaoPainel';
+  d.className='sess-painel';
+  document.body.appendChild(d);
+}
+function atualizarPainelSessao(){
+  const p=$('#sessaoPainel'); if(!p) return;
+  if(!ss.ativa){ p.classList.remove('show'); return; }
+  const pares=Object.keys(ss.pares).map(id=>ss.pares[id]);
+  const conectados=pares.filter(x=>x.pronto).length;
+  const cheia=totalNaSala()>=SESSAO_MAX;
+  p.innerHTML=`
+    <div class="sess-cab">
+      <span class="sess-pt"></span>
+      <b>Sessão ativa</b>
+      <span class="sess-cod" id="sessCodCopiar" title="Clique para copiar o código">${esc(ss.sala)}</span>
+      <button class="sess-x" id="sessFechar" title="Sair da sessão">✕</button>
+    </div>
+    <div class="sess-lista">
+      <div class="sess-p eu">
+        <span class="sess-bola" style="background:${ss.eu.cor}"></span>
+        <span class="sess-nome">${esc(ss.eu.nome)}</span>
+        <span class="sess-tag">você${ss.host?' · anfitrião':''}</span>
+      </div>
+      ${pares.map(x=>`
+        <div class="sess-p ${x.pronto?'':'ligando'}">
+          <span class="sess-bola" style="background:${x.cor}"></span>
+          <span class="sess-nome">${esc(x.nome)}</span>
+          ${x.pronto?'':'<span class="sess-tag">conectando…</span>'}
+        </div>`).join('')}
+    </div>
+    <div class="sess-rod">
+      <span>${totalNaSala()} de ${SESSAO_MAX}${cheia?' · sala cheia':''}</span>
+      <button class="sess-link" id="sessConvidar">＋ Convidar</button>
+    </div>`;
+  p.classList.add('show');
+  const bx=$('#sessFechar'); if(bx) bx.onclick=()=>sairSessao();
+  const bc=$('#sessCodCopiar');
+  if(bc) bc.onclick=()=>{
+    try{ navigator.clipboard.writeText(ss.sala); toast('Código copiado — envie aos participantes','ok'); }
+    catch(e){ toast('Código da sessão: '+ss.sala); }
+  };
+  const bi=$('#sessConvidar'); if(bi) bi.onclick=modalSessao;
+}
+
+function modalSessao(){
+  const cfg=lerConfigSessao();
+  const ativa=ss.ativa;
+  abrirModal('👥 Sessão compartilhada',
+    `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">
+       Permite que até <b>${SESSAO_MAX} pessoas</b> desenhem no mesmo diagrama ao mesmo tempo.
+       A conexão é <b>direta entre os navegadores</b> — o C-Flow não guarda nada em servidor.</p>
+     <div class="dica-inline" style="border-left-color:var(--sel);background:#FDF8EF">
+       Com a sessão ativa, o desenho <b>trafega entre os participantes</b>. Isso é diferente do uso
+       individual, em que nada sai da sua máquina. Use apenas com quem pode ver o conteúdo.
+     </div>
+     ${ativa?`
+       <div class="sess-box">
+         <div class="sess-box-tit">Sessão em andamento</div>
+         <div class="sess-cod-grande" id="sessCodBig">${esc(ss.sala)}</div>
+         <p style="font-size:12px;color:var(--txt2);margin:6px 0 10px">
+           Envie este código a quem for participar. ${totalNaSala()} de ${SESSAO_MAX} conectado(s).</p>
+         <div style="display:flex;gap:6px;flex-wrap:wrap">
+           <button class="btn primary sm" id="sessCopiar">⧉ Copiar código</button>
+           <button class="btn danger sm" id="sessSair">✕ Encerrar minha participação</button>
+         </div>
+       </div>`
+     :`
+       <div class="sess-opcoes">
+         <button class="sess-op" data-sess="criar">
+           <span class="sess-op-ico">✦</span>
+           <b>Criar uma sessão</b>
+           <span>Você compartilha o desenho atual e recebe um código para enviar ao time.</span>
+         </button>
+         <button class="sess-op" data-sess="entrar">
+           <span class="sess-op-ico">⇥</span>
+           <b>Entrar com um código</b>
+           <span>Alguém já criou a sessão e te passou o código de seis letras.</span>
+         </button>
+       </div>
+       <div class="field" style="margin-top:14px">
+         <label>Seu nome (aparece no cursor dos outros)</label>
+         <input id="sessNome" value="${esc(nomeParticipante())}" placeholder="Ex.: Caio Rocha">
+       </div>
+       <div id="sessEntrarCx" style="display:none">
+         <div class="field"><label>Código da sessão</label>
+           <input id="sessSala" placeholder="ex.: k7m2xq" maxlength="12"></div>
+         <button class="btn primary sm" id="sessEntrarOk">Entrar na sessão</button>
+       </div>`}
+     <div class="divider"></div>
+     <div class="sec ${cfg.modo==='manual'?'':'fechada'}" data-sec="sessAvanc">
+       <button class="sec-head" data-sectog="sessAvanc"><span class="sec-seta">▾</span><span>Conexão e rede</span></button>
+       <div class="sec-corpo">
+         <div class="field"><label>Servidor de sinalização</label>
+           <input id="sessServidor" value="${esc(cfg.servidor||'wss://y-webrtc-eu.fly.dev')}">
+           <div class="fieldhint" style="text-align:left">Só troca os dados de conexão. O desenho não passa por ele.</div>
+         </div>
+         <label class="dd-check" style="padding-left:0">
+           <input type="checkbox" id="sessManual" ${cfg.modo==='manual'?'checked':''}>
+           modo manual — copiar e colar o código de conexão
+         </label>
+         <div class="fieldhint" style="text-align:left;margin-top:4px">
+           Use quando a rede da empresa bloquear conexões persistentes. Não exige servidor algum.
+         </div>
+         ${ss.modoManual&&ss.ativa?`
+           <div class="field" style="margin-top:9px"><label>Seu código de conexão — envie ao outro participante</label>
+             <textarea id="sessCodigo" class="autogrow" rows="3" readonly></textarea></div>
+           <div class="field"><label>Cole aqui o código que você recebeu</label>
+             <textarea id="sessCodigoIn" class="autogrow" rows="3"></textarea></div>
+           <button class="btn sm" id="sessCodigoOk">Processar código recebido</button>`:''}
+         <button class="btn sm" id="sessSalvarCfg" style="margin-top:9px">Salvar preferências</button>
+       </div>
+     </div>`,
+    `<button class="btn" onclick="fecharModal()">Fechar</button>`);
+
+  if(typeof ligarSecoes==='function') ligarSecoes();
+  const nm=$('#sessNome');
+  $$('#modal [data-sess]').forEach(b=>b.onclick=()=>{
+    const a=b.dataset.sess;
+    if(nm && nm.value.trim()) definirMeuNome(nm.value.trim());
+    if(a==='criar'){ fecharModal(); iniciarSessao(null, true); setTimeout(modalSessao, 400); }
+    if(a==='entrar'){
+      const cx=$('#sessEntrarCx');
+      if(cx){ cx.style.display='block'; const s=$('#sessSala'); if(s) s.focus(); }
+      $$('#modal [data-sess]').forEach(x=>x.classList.toggle('on',x===b));
+    }
+  });
+  const be=$('#sessEntrarOk');
+  if(be) be.onclick=()=>{
+    const sala=($('#sessSala')||{value:''}).value.trim().toLowerCase();
+    if(!sala){ toast('Informe o código da sessão','err'); return; }
+    if(nm && nm.value.trim()) definirMeuNome(nm.value.trim());
+    fecharModal(); iniciarSessao(sala, false);
+  };
+  const bcp=$('#sessCopiar');
+  if(bcp) bcp.onclick=()=>{
+    try{ navigator.clipboard.writeText(ss.sala); toast('Código copiado','ok'); }
+    catch(e){ toast('Código: '+ss.sala); }
+  };
+  const bs=$('#sessSair'); if(bs) bs.onclick=()=>{ fecharModal(); sairSessao(); };
+  const bsv=$('#sessSalvarCfg');
+  if(bsv) bsv.onclick=()=>{
+    const c=lerConfigSessao();
+    c.servidor=($('#sessServidor')||{value:''}).value.trim();
+    c.modo=($('#sessManual')||{checked:false}).checked?'manual':'auto';
+    salvarConfigSessao(c);
+    ss.modoManual = c.modo==='manual';
+    toast('Preferências de conexão salvas','ok');
+  };
+  const bco=$('#sessCodigoOk');
+  if(bco) bco.onclick=()=>{ lerCodigoManual(($('#sessCodigoIn')||{value:''}).value); };
+  if(typeof autoGrow==='function'){ autoGrow('#sessCodigo'); autoGrow('#sessCodigoIn'); }
+}
+
+/* =========================================================================
+   10) ESPIÃO DE ALTERAÇÕES — intercepta o ponto único por onde tudo passa
+   ========================================================================= */
+let _espiaoLigado=false;
+function ligarEspiaoDeAlteracoes(){
+  if(_espiaoLigado) return;
+  _espiaoLigado=true;
+  /* pushHistory é chamado por toda mutação confirmada do modelo */
+  const orig=pushHistory;
+  pushHistory=function(){
+    const r=orig.apply(this, arguments);
+    if(ss.ativa && !ss.ecoando){
+      /* seleção corrente é a melhor aproximação do que mudou */
+      const ids=[...selection];
+      if(ids.length) marcarAlterado(ids);
+      else transmitirTudo();
+    }
+    return r;
+  };
+}
+
+/* =========================================================================
+   11) ARRANQUE
+   ========================================================================= */
+function initSessao(){
+  /* botão na barra superior */
+  const guia=$('#btnGuia');
+  if(guia && guia.parentNode && !$('#btnSessao')){
+    const b=document.createElement('button');
+    b.className='btn ghost sm'; b.id='btnSessao';
+    b.title='Sessão compartilhada — desenhar junto com outras pessoas';
+    b.innerHTML='👥 Sessão';
+    b.onclick=modalSessao;
+    guia.parentNode.insertBefore(b, guia);
+  }
+  montarPainelSessao();
+  /* cursor viaja junto com o movimento do mouse na área de desenho */
+  const wrap=$('#canvasWrap');
+  if(wrap) wrap.addEventListener('mousemove', ev=>{
+    if(!ss.ativa) return;
+    try{ enviarCursor(evtPos(ev)); }catch(e){}
+  });
+  /* posse ao começar a arrastar, liberação ao terminar */
+  const host=$('#svgHost');
+  if(host){
+    host.addEventListener('mousedown', ev=>{
+      if(!ss.ativa) return;
+      const g=ev.target.closest && ev.target.closest('[data-id]');
+      if(g && g.dataset.id) tomarPosse(g.dataset.id);
+    }, true);
+  }
+  window.addEventListener('mouseup', ()=>{
+    if(!ss.ativa) return;
+    const ids=[...selection];
+    if(ids.length) setTimeout(()=>liberarPosse(ids), 400);
+  });
+  /* limpeza periódica de cursores e posses vencidas */
+  setInterval(()=>{
+    if(!ss.ativa) return;
+    const antes=Object.keys(ss.cursores).length;
+    const agora=Date.now();
+    Object.keys(ss.cursores).forEach(id=>{ if(agora-ss.cursores[id].quando>CURSOR_VIDA) delete ss.cursores[id]; });
+    limparPossesExpiradas();
+    if(antes!==Object.keys(ss.cursores).length) render();
+  }, 2500);
+  window.addEventListener('beforeunload', ()=>{ if(ss.ativa) sairSessao(true); });
+}
+
+</script>
+<script>
+/* =========================================================================
+   C-Flow v24 — MODELOS PRONTOS ROBUSTOS
+   Cronograma · Design Thinking · App/Telas · Roadmap
+   Construídos nos formatos que o mercado usa de fato.
+   ========================================================================= */
+
+/* posiciona uma grade regular, respeitando um passo */
+function _grade(itens, x0, y0, passoX, passoY, colunas){
+  return itens.map((it,i)=>{
+    const c=i%colunas, l=Math.floor(i/colunas);
+    return Object.assign(it, {x:x0+c*passoX, y:y0+l*passoY});
+  });
+}
+
+if(typeof TEMPLATES!=='undefined' && Array.isArray(TEMPLATES)){
+TEMPLATES.push(
+
+/* ═══════════════════════ CRONOGRAMA ═══════════════════════ */
+{id:'crono-gantt', fam:'crono', nome:'Gantt de projeto',
+ desc:'Régua de meses, fases agrupadas, caminho crítico, marcos e linha de hoje — o cronograma executivo completo.',
+ montar(){
+   const ns=[], eds=[];
+   const X0=210, LARG=118, Y0=70;
+   const meses=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago'];
+   /* régua de tempo */
+   meses.forEach((m,i)=>{
+     ns.push(_no('cronPeriodo', X0+i*LARG, Y0, m, {w:LARG, h:46}));
+   });
+   /* fases: barra de resumo + tarefas */
+   const fases=[
+     {nome:'1 · Diagnóstico', ini:0, dur:2, y:150, tarefas:[
+       {n:'Levantar processo atual', i:0,   d:1,   pct:100, resp:'Analista'},
+       {n:'Entrevistar áreas',       i:0.5, d:1.2, pct:100, resp:'Analista'},
+       {n:'Consolidar achados',      i:1.3, d:0.7, pct:80,  resp:'Líder'}
+     ]},
+     {nome:'2 · Desenho', ini:1.8, dur:2.4, y:340, tarefas:[
+       {n:'Desenhar processo futuro', i:1.8, d:1.4, pct:60, resp:'Analista', crit:true},
+       {n:'Validar com o gestor',     i:3.0, d:0.6, pct:0,  resp:'Gestor'},
+       {n:'Aprovar escopo',           i:3.5, d:0.7, pct:0,  resp:'Sponsor', crit:true}
+     ]},
+     {nome:'3 · Implantação', ini:4.2, dur:3, y:530, tarefas:[
+       {n:'Configurar sistema',   i:4.2, d:1.6, pct:0, resp:'TI', crit:true},
+       {n:'Treinar operação',     i:5.4, d:1.0, pct:0, resp:'RH'},
+       {n:'Acompanhar rodagem',   i:6.0, d:1.2, pct:0, resp:'Analista'}
+     ]}
+   ];
+   fases.forEach(f=>{
+     ns.push(_no('shpRet', 40, f.y, f.nome, {w:150, h:36, cor:'#4F6355', fundo:'#F2F7F3'}));
+     ns.push(_no('cronResumo', X0+f.ini*LARG, f.y-4, '', {w:f.dur*LARG, h:30}));
+     f.tarefas.forEach((t,k)=>{
+       const tipo=t.crit?'cronBarraCr':'cronBarra';
+       const b=_no(tipo, X0+t.i*LARG, f.y+44+k*48, t.n,
+         {w:Math.max(150,t.d*LARG), h:36, progresso:t.pct, resp:t.resp});
+       b.doc=`Responsável: ${t.resp}. Duração aproximada de ${t.d.toFixed(1)} mês(es).`;
+       ns.push(b);
+     });
+   });
+   /* marcos em faixa própria, abaixo das fases — sem colidir com as barras */
+   const YM=730;
+   ns.push(_no('shpRet', 40, YM, 'MARCOS', {w:150, h:36, cor:'#B7791F', fundo:'#FCF5E7'}));
+   ns.push(_no('shpRet', X0, YM+14, '', {w:8*LARG, h:4, cor:'#B7791F', fundo:'#B7791F'}));
+   [[1.8,'Diagnóstico aprovado'],[4.2,'Escopo assinado'],[7.2,'Go-live']].forEach(([q,n])=>{
+     ns.push(_no('cronMarco', X0+q*LARG-35, YM-18, n));
+   });
+   ns.push(_no('cronHoje', X0+2.6*LARG, 60, '', {h:700}));
+   /* dependência entre fases */
+   ns.push(_no('cronDepend', X0+3.4*LARG, YM+120, 'Implantação depende do escopo aprovado', {w:320}));
+   ns.push(_no('textAnnotation', 40, YM+120,
+     'Barras em vermelho: caminho crítico. O atraso nelas empurra a data final do projeto.', {w:300, h:60}));
+   return {pools:[], nodes:ns, edges:eds,
+     meta:{nome:'Cronograma do projeto', tipo:'TO-BE',
+           objetivo:'Planejar e acompanhar as entregas do projeto ao longo do tempo.'}};
+ }},
+
+{id:'crono-sprints', fam:'crono', nome:'Planejamento por sprints',
+ desc:'Seis sprints em sequência com objetivo, entregas e marcos de release — para times ágeis.',
+ montar(){
+   const ns=[];
+   const rot=[
+     {n:'Sprint 1', obj:'Descoberta e alinhamento',    t:'2 semanas'},
+     {n:'Sprint 2', obj:'Protótipo navegável',          t:'2 semanas'},
+     {n:'Sprint 3', obj:'Primeira versão funcional',    t:'2 semanas'},
+     {n:'Sprint 4', obj:'Integrações e testes',         t:'2 semanas'},
+     {n:'Sprint 5', obj:'Ajustes e homologação',        t:'2 semanas'},
+     {n:'Sprint 6', obj:'Publicação e acompanhamento',  t:'2 semanas'}
+   ];
+   rot.forEach((r,i)=>{
+     const s=_no('cronSprint', 90+i*230, 150, r.n, {w:200, h:86, tempo:r.t});
+     s.doc=r.obj;
+     ns.push(s);
+     ns.push(_no('textAnnotation', 90+i*230, 250, r.obj, {w:200, h:52}));
+   });
+   ns.push(_no('cronMarco', 90+2*230+65, 340, 'Release 1'));
+   ns.push(_no('cronMarco', 90+5*230+65, 340, 'Release 2'));
+   ns.push(_no('shpChevron', 90, 60, 'Trimestre atual', {w:1380, h:56}));
+   const eds=[];
+   for(let i=0;i<rot.length-1;i++){
+     eds.push(_lig(ns[i*2].id, ns[(i+1)*2].id, '', 'sequenceFlow', ['e','w']));
+   }
+   return {pools:[], nodes:ns, edges:eds,
+     meta:{nome:'Planejamento por sprints', tipo:'TO-BE'}};
+ }},
+
+{id:'crono-marcos', fam:'crono', nome:'Linha do tempo de marcos',
+ desc:'Eventos-chave numa régua horizontal, para comunicar a jornada a patrocinadores.',
+ montar(){
+   const ns=[];
+   const eventos=[
+     {n:'Aprovação do projeto', d:'Jan'},
+     {n:'Início do diagnóstico', d:'Fev'},
+     {n:'Processo redesenhado',  d:'Abr'},
+     {n:'Sistema configurado',   d:'Jun'},
+     {n:'Time treinado',         d:'Jul'},
+     {n:'Operação estabilizada', d:'Set'}
+   ];
+   ns.push(_no('shpRet', 80, 296, '', {w:1320, h:6, cor:'#4F6355', fundo:'#4F6355'}));
+   eventos.forEach((e,i)=>{
+     const x=120+i*215;
+     const acima=i%2===0;
+     ns.push(_no('cronEvento', x, acima?180:300, e.n, {w:170, h:96}));
+     ns.push(_no('cronPeriodo', x+10, acima?140:410, e.d, {w:120, h:40}));
+   });
+   ns.push(_no('cronHoje', 120+2.4*215, 130, '', {h:330}));
+   return {pools:[], nodes:ns, edges:[],
+     meta:{nome:'Linha do tempo do projeto'}};
+ }},
+
+/* ═══════════════════════ DESIGN THINKING ═══════════════════════ */
+{id:'dt-duplo', fam:'dt', nome:'Duplo diamante completo',
+ desc:'As quatro fases — descobrir, definir, desenvolver e entregar — com os artefatos de cada uma.',
+ montar(){
+   const ns=[];
+   const fases=[
+     {n:'DESCOBRIR', sub:'Ampliar o entendimento', x:60,   cor:'#2C5F8A'},
+     {n:'DEFINIR',   sub:'Focar no problema certo', x:430,  cor:'#5B4B9E'},
+     {n:'DESENVOLVER', sub:'Gerar possibilidades', x:800,  cor:'#B7791F'},
+     {n:'ENTREGAR',  sub:'Testar e refinar',       x:1170, cor:'#2F855A'}
+   ];
+   fases.forEach(f=>{
+     ns.push(_no('shpChevron', f.x, 60, f.n, {w:330, h:64, cor:f.cor, fundo:'#FFFFFF'}));
+     ns.push(_no('textAnnotation', f.x+10, 130, f.sub, {w:300, h:40}));
+   });
+   /* descobrir */
+   ns.push(_no('dtPersona', 70, 190, 'Ana, analista de compras',
+     {doc:'Concilia notas todo dia. Quer terminar sem retrabalho.'}));
+   ns.push(_no('dtDor', 70, 330, 'Precisa conferir três sistemas'));
+   ns.push(_no('dtDor', 70, 430, 'Recebe anexo incompleto'));
+   ns.push(_no('dtGanho', 70, 530, 'Fechar o dia sem pendência'));
+   /* definir */
+   ns.push(_no('dtInsight', 440, 190, 'O erro nasce na origem, não na conferência'));
+   ns.push(_no('dtHmw', 440, 300, 'Como podemos garantir o anexo correto na entrada?'));
+   ns.push(_no('dtHipotese', 440, 420, 'Se validarmos o anexo no envio, o retrabalho cai pela metade'));
+   ns.push(_no('dtJornada', 440, 540, 'Momento crítico: envio'));
+   /* desenvolver */
+   ns.push(_no('dtIdeia', 810, 190, 'Validação automática do anexo'));
+   ns.push(_no('dtIdeia', 810, 290, 'Checklist antes de enviar'));
+   ns.push(_no('dtIdeia', 810, 390, 'Modelo de nota padronizado'));
+   ns.push(_no('dtVoto', 810, 490, '7 votos'));
+   ns.push(_no('dtPostit', 990, 190, 'Testar com 5 fornecedores'));
+   /* entregar */
+   ns.push(_no('dtProto', 1180, 190, 'Protótipo do formulário'));
+   ns.push(_no('dtTeste', 1180, 320, 'Teste com usuários reais'));
+   ns.push(_no('dtEmocao', 1180, 440, 'Curva de emoção depois'));
+   ns.push(_no('roadAgora', 1180, 560, 'Implantar validação'));
+   const eds=[
+     _lig(ns[8].id, ns[12].id, '', 'association'),
+     _lig(ns[12].id, ns[13].id, '', 'association'),
+     _lig(ns[13].id, ns[16].id, '', 'association'),
+     _lig(ns[16].id, ns[21].id, '', 'association')
+   ];
+   return {pools:[], nodes:ns, edges:eds,
+     meta:{nome:'Duplo diamante — Conciliação de notas',
+           objetivo:'Reduzir o retrabalho na conferência de notas fiscais.'}};
+ }},
+
+{id:'dt-jornada', fam:'dt', nome:'Mapa de jornada do usuário',
+ desc:'Etapas, ações, emoções, pontos de contato, dores e oportunidades em faixas — o formato de mercado.',
+ montar(){
+   const ns=[];
+   const etapas=['Descobrir a necessidade','Solicitar','Aguardar','Receber','Avaliar'];
+   /* rótulos das faixas */
+   const faixas=[
+     {n:'ETAPA',            y:120, cor:'#233029'},
+     {n:'AÇÃO DO USUÁRIO',  y:230, cor:'#4F6355'},
+     {n:'PONTO DE CONTATO', y:340, cor:'#2C5F8A'},
+     {n:'EMOÇÃO',           y:450, cor:'#5B4B9E'},
+     {n:'DOR',              y:560, cor:'#C0392B'},
+     {n:'OPORTUNIDADE',     y:670, cor:'#2F855A'}
+   ];
+   faixas.forEach(f=>{
+     ns.push(_no('shpRet', 50, f.y, f.n, {w:170, h:80, cor:f.cor, fundo:'#F7F9F8'}));
+   });
+   const conteudo=[
+     ['Percebe que falta material','Abre o catálogo','Preenche a requisição','Recebe o material','Confirma o recebimento'],
+     ['Intranet','Portal de compras','E-mail','Almoxarifado','Portal de compras'],
+     ['Preocupada','Confiante','Ansiosa','Aliviada','Satisfeita'],
+     ['Não sabe o que pedir','Formulário longo','Sem previsão de entrega','Item divergente','—'],
+     ['Catálogo com fotos','Preenchimento automático','Aviso de status','Conferência na entrega','Avaliação rápida']
+   ];
+   etapas.forEach((e,i)=>{
+     const x=250+i*250;
+     ns.push(_no('shpRetArred', x, 120, e, {w:220, h:80, cor:'#233029', fundo:'#EEF4F0'}));
+     conteudo.forEach((linha,k)=>{
+       const tipo = k===2 ? 'dtEmocao' : (k===3 ? 'dtDor' : (k===4 ? 'dtGanho' : 'shpRet'));
+       const alt  = k===2 ? 80 : 80;
+       ns.push(_no(tipo, x, 230+k*110, linha[i], {w:220, h:alt}));
+     });
+   });
+   ns.push(_no('dtPersona', 50, 790, 'Persona: Ana, requisitante',
+     {w:400, h:110, doc:'Solicita material duas vezes por semana. Não tem tempo para retrabalho.'}));
+   return {pools:[], nodes:ns, edges:[],
+     meta:{nome:'Jornada do usuário — Requisição de material'}};
+ }},
+
+{id:'dt-empatia', fam:'dt', nome:'Mapa de empatia',
+ desc:'Os seis quadrantes clássicos em torno da persona: pensa, vê, fala, ouve, dores e ganhos.',
+ montar(){
+   const ns=[];
+   const quad=[
+     {n:'PENSA E SENTE', x:420, y:80,  cor:'#5B4B9E', ex:'“Será que vou conseguir entregar no prazo?”'},
+     {n:'VÊ',            x:80,  y:300, cor:'#2C5F8A', ex:'Colegas resolvendo por planilha paralela'},
+     {n:'OUVE',          x:760, y:300, cor:'#B7791F', ex:'“O sistema é lento, faz na mão mesmo”'},
+     {n:'FALA E FAZ',    x:420, y:520, cor:'#1F6B5E', ex:'Confere duas vezes antes de enviar'}
+   ];
+   quad.forEach(q=>{
+     ns.push(_no('shpRetArred', q.x, q.y, q.n, {w:320, h:180, cor:q.cor, fundo:'#FFFFFF'}));
+     ns.push(_no('dtPostit', q.x+180, q.y+40, q.ex, {w:120, h:120}));
+   });
+   ns.push(_no('dtPersona', 420, 300, 'Ana, analista', {w:320, h:200,
+     doc:'8 anos de casa. Conhece o processo melhor que a documentação.'}));
+   ns.push(_no('dtDor', 80, 720, 'Retrabalho constante', {w:320}));
+   ns.push(_no('dtDor', 80, 810, 'Falta de visibilidade', {w:320}));
+   ns.push(_no('dtGanho', 760, 720, 'Terminar o dia em dia', {w:320}));
+   ns.push(_no('dtGanho', 760, 810, 'Confiar no número', {w:320}));
+   ns.push(_no('shpRet', 80, 700, 'DORES', {w:320, h:30, cor:'#C0392B', fundo:'#FBEBE9'}));
+   ns.push(_no('shpRet', 760, 700, 'GANHOS', {w:320, h:30, cor:'#2F855A', fundo:'#E8F5EE'}));
+   return {pools:[], nodes:ns, edges:[],
+     meta:{nome:'Mapa de empatia'}};
+ }},
+
+{id:'dt-oficina', fam:'dt', nome:'Painel de oficina',
+ desc:'Quadro de trabalho para sessão ao vivo: contexto, ideias em post-it, priorização e próximos passos.',
+ montar(){
+   const ns=[];
+   ns.push(_no('shpRet', 60, 50, 'CONTEXTO', {w:400, h:34, cor:'#233029', fundo:'#EEF4F0'}));
+   ns.push(_no('dtHmw', 60, 100, 'Como podemos reduzir o tempo de atendimento?', {w:400, h:96}));
+   ns.push(_no('shpRet', 60, 240, 'IDEIAS', {w:400, h:34, cor:'#B7791F', fundo:'#FCF5E7'}));
+   const ideias=['Autoatendimento','Base de conhecimento','Triagem automática','Fila por prioridade',
+                 'Modelo de resposta','Alerta de reincidência'];
+   _grade(ideias.map(t=>_no('dtPostit',0,0,t)), 60, 290, 140, 140, 3).forEach(n=>ns.push(n));
+   ns.push(_no('shpRet', 560, 240, 'PRIORIZAÇÃO', {w:560, h:34, cor:'#5B4B9E', fundo:'#F1EFFA'}));
+   ns.push(_no('shpRetArred', 560, 290, 'Alto impacto · Baixo esforço', {w:270, h:170, cor:'#2F855A', fundo:'#E8F5EE'}));
+   ns.push(_no('shpRetArred', 850, 290, 'Alto impacto · Alto esforço',  {w:270, h:170, cor:'#B7791F', fundo:'#FCF5E7'}));
+   ns.push(_no('shpRetArred', 560, 480, 'Baixo impacto · Baixo esforço',{w:270, h:170, cor:'#6B7280', fundo:'#F4F5F7'}));
+   ns.push(_no('shpRetArred', 850, 480, 'Baixo impacto · Alto esforço', {w:270, h:170, cor:'#C0392B', fundo:'#FBEBE9'}));
+   ns.push(_no('shpRet', 1180, 240, 'PRÓXIMOS PASSOS', {w:320, h:34, cor:'#2F855A', fundo:'#E8F5EE'}));
+   ns.push(_no('roadAgora',   1180, 290, 'Testar triagem automática', {w:320}));
+   ns.push(_no('roadProximo', 1180, 390, 'Montar base de conhecimento', {w:320}));
+   ns.push(_no('roadDepois',  1180, 490, 'Autoatendimento completo', {w:320}));
+   ns.push(_no('dtVoto', 1180, 600, '12 votos'));
+   ns.push(_no('textAnnotation', 60, 730,
+     'Regra da sessão: uma ideia por post-it, sem julgar durante a geração. A priorização vem depois.',
+     {w:440, h:60}));
+   return {pools:[], nodes:ns, edges:[],
+     meta:{nome:'Oficina de melhoria'}};
+ }},
+
+/* ═══════════════════════ APP / TELAS ═══════════════════════ */
+{id:'app-fluxo', fam:'app', nome:'Fluxo de aplicativo completo',
+ desc:'Onboarding, login, home, detalhe e confirmação, com componentes reais e navegação entre telas.',
+ montar(){
+   const ns=[], eds=[];
+   const telas=[
+     {n:'Abertura',    x:60},
+     {n:'Login',       x:340},
+     {n:'Início',      x:620},
+     {n:'Detalhe',     x:900},
+     {n:'Confirmação', x:1180}
+   ];
+   telas.forEach(t=>{ ns.push(_no('appTela', t.x, 120, t.n, {w:220, h:400})); });
+   /* componentes por cima das telas */
+   ns.push(_no('appBotao',  100, 380, 'Começar',   {w:140, h:44}));
+   ns.push(_no('appCampo',  372, 250, 'E-mail',    {w:156, h:48}));
+   ns.push(_no('appCampo',  372, 320, 'Senha',     {w:156, h:48}));
+   ns.push(_no('appBotao',  372, 400, 'Entrar',    {w:156, h:44}));
+   ns.push(_no('appLista',  650, 240, 'Meus itens',{w:160, h:150}));
+   ns.push(_no('appMenu',   650, 450, 'Navegação', {w:160, h:52}));
+   ns.push(_no('appCard',   930, 250, 'Item selecionado', {w:160, h:110}));
+   ns.push(_no('appBotao',  930, 400, 'Confirmar', {w:160, h:44}));
+   ns.push(_no('appNotif', 1210, 250, 'Pedido confirmado', {w:160, h:64}));
+   ns.push(_no('appModal', 1210, 350, 'Deseja avaliar?',   {w:160, h:120}));
+   /* pontos de contato e estados */
+   ns.push(_no('appUsuario', 60, 570, 'Primeiro acesso'));
+   ns.push(_no('devEstado',  340, 570, 'Estado: erro de senha', {w:220}));
+   ns.push(_no('devEstado',  620, 570, 'Estado: lista vazia',   {w:220}));
+   ns.push(_no('appAbas',    900, 570, 'Abas de detalhe',       {w:220}));
+   for(let i=0;i<telas.length-1;i++){
+     eds.push(_lig(ns[i].id, ns[i+1].id, '', 'sequenceFlow', ['e','w']));
+   }
+   ns.push(_no('textAnnotation', 60, 660,
+     'Cada tela recebe o print correspondente. Use a categoria Telas & Dispositivos para o frame do aparelho.',
+     {w:460, h:56}));
+   return {pools:[], nodes:ns, edges:eds,
+     meta:{nome:'Fluxo do aplicativo'}};
+ }},
+
+{id:'app-design', fam:'app', nome:'Biblioteca de componentes',
+ desc:'Catálogo dos elementos de interface agrupados por função — a base de um design system.',
+ montar(){
+   const ns=[];
+   const grupos=[
+     {t:'ENTRADA DE DADOS', y:80,  itens:[['appCampo','Campo de texto'],['appSeletor','Seletor'],['appToggle','Interruptor']]},
+     {t:'AÇÃO',             y:260, itens:[['appBotao','Botão principal'],['appBotao','Botão secundário'],['appBotao','Botão de risco']]},
+     {t:'EXIBIÇÃO',         y:440, itens:[['appCard','Card'],['appLista','Lista'],['appNotif','Notificação']]},
+     {t:'NAVEGAÇÃO',        y:660, itens:[['appAbas','Abas'],['appMenu','Menu inferior'],['appModal','Modal']]}
+   ];
+   grupos.forEach(g=>{
+     ns.push(_no('shpRet', 60, g.y, g.t, {w:200, h:34, cor:'#233029', fundo:'#EEF4F0'}));
+     g.itens.forEach((it,i)=>{
+       ns.push(_no(it[0], 300+i*260, g.y, it[1], {w:220}));
+     });
+   });
+   ns.push(_no('textAnnotation', 60, 860,
+     'Padronize aqui os componentes antes de montar as telas: mesma altura, mesmo espaçamento, mesmos rótulos.',
+     {w:500, h:60}));
+   return {pools:[], nodes:ns, edges:[],
+     meta:{nome:'Biblioteca de componentes'}};
+ }},
+
+{id:'app-web', fam:'app', nome:'Web app — jornada em navegador',
+ desc:'Três janelas de navegador encadeadas, com áreas clicáveis e estados de cada tela.',
+ montar(){
+   const ns=[], eds=[];
+   const a=_no('devBrowser', 60, 100, 'Painel',           {w:460, h:320, url:'https://app.exemplo.com/painel'});
+   const b=_no('devBrowser', 580, 100, 'Detalhe',          {w:460, h:320, url:'https://app.exemplo.com/registro/1042'});
+   const c=_no('devBrowser',1100, 100, 'Confirmação',      {w:460, h:320, url:'https://app.exemplo.com/ok'});
+   ns.push(a,b,c);
+   ns.push(_no('devHotspot',  200, 470, 'Abrir registro',  {w:180}));
+   ns.push(_no('devHotspot',  720, 470, 'Salvar alteração',{w:180}));
+   ns.push(_no('devEstado',    60, 550, 'Estado: carregando', {w:200}));
+   ns.push(_no('devEstado',   300, 550, 'Estado: sem dados',  {w:200}));
+   ns.push(_no('devEstado',   580, 550, 'Estado: erro ao salvar', {w:220}));
+   eds.push(_lig(a.id, b.id, '', 'sequenceFlow', ['e','w']));
+   eds.push(_lig(b.id, c.id, '', 'sequenceFlow', ['e','w']));
+   eds.push(_lig(ns[3].id, b.id, '', 'association'));
+   eds.push(_lig(ns[4].id, c.id, '', 'association'));
+   return {pools:[], nodes:ns, edges:eds,
+     meta:{nome:'Jornada em web app'}};
+ }},
+
+/* ═══════════════════════ ROADMAP ═══════════════════════ */
+{id:'road-trimestral', fam:'road', nome:'Roadmap trimestral por trilha',
+ desc:'Trilhas por frente de trabalho × trimestres, com épicos, releases e riscos — o formato executivo.',
+ montar(){
+   const ns=[];
+   const X0=250, LARG=300, ITEM=272;
+   const quarters=['Q1','Q2','Q3','Q4'];
+   quarters.forEach((q,i)=>{
+     ns.push(_no('roadQuarter', X0+i*LARG, 60, q, {w:ITEM, h:56}));
+   });
+   const trilhas=[
+     {n:'Produto',    y:140, cor:'#5B4B9E', itens:[
+       {t:'roadEpico',   q:0, n:'Portal do cliente'},
+       {t:'roadFeature', q:1, n:'Autoatendimento'},
+       {t:'roadRelease', q:2, n:'v2.0 publicada'}
+     ]},
+     {n:'Operação',   y:330, cor:'#2C5F8A', itens:[
+       {t:'roadEpico',   q:0, n:'Padronizar atendimento'},
+       {t:'roadFeature', q:2, n:'Triagem automática'},
+       {t:'roadFeature', q:3, n:'Painel de indicadores'}
+     ]},
+     {n:'Tecnologia', y:520, cor:'#1F6B5E', itens:[
+       {t:'roadFeature', q:1, n:'Integração com o ERP'},
+       {t:'roadEpico',   q:2, n:'Migração para nuvem'},
+       {t:'roadRisco',   q:3, n:'Janela de indisponibilidade'}
+     ]}
+   ];
+   trilhas.forEach(tr=>{
+     ns.push(_no('roadTrilha', 60, tr.y, tr.n, {w:X0-60+4*LARG, h:170, cor:tr.cor}));
+     tr.itens.forEach((it,k)=>{
+       ns.push(_no(it.t, X0+it.q*LARG, tr.y+20+k*52, it.n, {w:ITEM, h:46}));
+     });
+   });
+   ns.push(_no('roadObjetivo', 60, 720, 'Reduzir o tempo de atendimento em 30%',
+     {w:420, h:100, doc:'métrica-chave: tempo médio de resolução'}));
+   ns.push(_no('roadObjetivo', 520, 720, 'Elevar a satisfação para 4,5',
+     {w:420, h:100, doc:'métrica-chave: NPS do atendimento'}));
+   ns.push(_no('cronHoje', X0+1.4*LARG, 50, '', {h:660}));
+   return {pools:[], nodes:ns, edges:[],
+     meta:{nome:'Roadmap trimestral', tipo:'TO-BE'}};
+ }},
+
+{id:'road-horizontes', fam:'road', nome:'Agora · Próximo · Depois',
+ desc:'Roadmap por horizonte de compromisso, sem prometer datas — o formato mais honesto com o time.',
+ montar(){
+   const ns=[];
+   const cols=[
+     {t:'roadAgora',   n:'AGORA',   x:60,   sub:'Em execução · compromisso assumido', itens:[
+       'Padronizar o atendimento de nível 1',
+       'Publicar a base de conhecimento',
+       'Medir o tempo de resolução'
+     ]},
+     {t:'roadProximo', n:'PRÓXIMO', x:560,  sub:'Planejado para o ciclo seguinte', itens:[
+       'Triagem automática de chamados',
+       'Integração com o ERP',
+       'Painel de indicadores'
+     ]},
+     {t:'roadDepois',  n:'DEPOIS',  x:1060, sub:'Em avaliação · sem data', itens:[
+       'Autoatendimento completo',
+       'Assistente de resposta',
+       'Migração para nuvem'
+     ]}
+   ];
+   cols.forEach(c=>{
+     ns.push(_no('shpRet', c.x, 70, c.n, {w:440, h:44,
+       cor: c.t==='roadAgora'?'#2F855A':(c.t==='roadProximo'?'#B7791F':'#6B7280'),
+       fundo: c.t==='roadAgora'?'#E8F5EE':(c.t==='roadProximo'?'#FCF5E7':'#F4F5F7')}));
+     ns.push(_no('textAnnotation', c.x, 125, c.sub, {w:440, h:40}));
+     c.itens.forEach((it,i)=>{
+       ns.push(_no(c.t, c.x, 185+i*110, it, {w:440, h:90}));
+     });
+   });
+   ns.push(_no('roadObjetivo', 60, 560, 'Objetivo do ciclo: atendimento previsível e medido',
+     {w:940, h:100, doc:'métrica-chave: 90% dos chamados resolvidos em até 2 dias'}));
+   ns.push(_no('roadRisco', 1060, 560, 'Risco: depende da liberação de acesso pela TI', {w:440, h:100}));
+   ns.push(_no('textAnnotation', 60, 690,
+     'Este formato evita comprometer datas distantes. O que está em AGORA tem responsável e prazo; o resto é intenção.',
+     {w:700, h:60}));
+   return {pools:[], nodes:ns, edges:[],
+     meta:{nome:'Roadmap por horizontes', tipo:'TO-BE'}};
+ }},
+
+{id:'road-okr', fam:'road', nome:'OKR e entregas ligadas',
+ desc:'Objetivos no topo, resultados-chave abaixo e as entregas que sustentam cada um.',
+ montar(){
+   const ns=[], eds=[];
+   const obj=_no('roadObjetivo', 480, 60, 'Tornar o atendimento previsível',
+     {w:460, h:110, doc:'trimestre corrente · dono: Coordenação de Operações'});
+   ns.push(obj);
+   const krs=[
+     {n:'90% resolvidos em 2 dias',   x:60},
+     {n:'Reincidência abaixo de 8%',  x:520},
+     {n:'Satisfação acima de 4,5',    x:980}
+   ];
+   const nosKR=krs.map(k=>{
+     const n=_no('roadFeature', k.x, 250, k.n, {w:420, h:80});
+     ns.push(n); eds.push(_lig(obj.id, n.id, '', 'association'));
+     return n;
+   });
+   const entregas=[
+     ['Triagem automática','Fila por prioridade','Alerta de prazo'],
+     ['Base de conhecimento','Modelo de resposta','Revisão de causa raiz'],
+     ['Pesquisa pós-atendimento','Painel de satisfação','Ciclo de feedback']
+   ];
+   entregas.forEach((lista,i)=>{
+     lista.forEach((e,k)=>{
+       const n=_no('roadEpico', krs[i].x, 380+k*100, e, {w:420, h:80});
+       ns.push(n); eds.push(_lig(nosKR[i].id, n.id, '', 'association'));
+     });
+   });
+   ns.push(_no('roadRisco', 60, 700, 'Sem acesso ao ERP, a triagem automática não sai do papel', {w:420}));
+   ns.push(_no('textAnnotation', 520, 700,
+     'Cada resultado-chave precisa de pelo menos uma entrega que o sustente. Entrega sem KR é esforço solto.',
+     {w:880, h:60}));
+   return {pools:[], nodes:ns, edges:eds,
+     meta:{nome:'OKR do trimestre', tipo:'TO-BE'}};
+ }}
+
+);
+}
+
+</script>
+
+
 </body></html>
