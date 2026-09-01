@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>C-Flow · Process Design System</title>
+<title>C-Floxer · Flow Builder</title>
 <style>
 :root{
-  /* C-Flow — verde musgo com gradiente de brancos; seleção em âmbar */
+  /* C-Floxer — verde musgo com gradiente de brancos; seleção em âmbar */
   --musgo-9:#233029; --musgo-8:#2F3E34; --musgo-7:#3D5142; --musgo-6:#4F6355;
   --musgo-5:#6B8A72; --musgo-4:#8FA896; --musgo-3:#A8BFAE; --musgo-2:#CBDACF;
   --musgo-1:#E4EDE7; --musgo-0:#F2F7F3;
@@ -1001,8 +1001,8 @@ table.grid select{font-size:11px}
 
 <header class="topbar">
   <div class="brand">
-    <div class="logo" title="C-Flow — Process Design System"><svg width="25" height="25" viewBox="0 0 64 64"><path d="M39.5 15.6A19 19 0 0 0 11.4 28" fill="none" stroke="#fff" stroke-width="6.6" stroke-linecap="round"/><path d="M11.4 36A19 19 0 0 0 39.5 48.4" fill="none" stroke="#fff" stroke-width="6.6" stroke-linecap="round"/><rect x="3.6" y="25.4" width="16.4" height="13.2" rx="3.4" fill="#CBDACF"/><circle cx="39.5" cy="15.6" r="6.4" fill="#fff"/><circle cx="39.5" cy="48.4" r="6.6" fill="none" stroke="#fff" stroke-width="3.2"/><path d="M47.4 48.4h5.4" stroke="#E0B978" stroke-width="3.2" stroke-linecap="round" fill="none"/><path d="M50.6 44.2L58 48.4L50.6 52.6z" fill="#E0B978"/></svg></div>
-    <div><h1>C-Flow</h1><span>Process Design System</span></div>
+    <div class="logo" title="C-Floxer — clique para ampliar, copiar ou baixar a marca"><svg width="25" height="25" viewBox="0 0 64 64"><path d="M40 17A17 17 0 0 0 14 27.5" fill="none" stroke="#fff" stroke-width="7.6" stroke-linecap="round"/><path d="M14 36.5A17 17 0 0 0 40 47" fill="none" stroke="#fff" stroke-width="7.6" stroke-linecap="round"/><rect x="4" y="24.6" width="18" height="14.8" rx="4" fill="#CBDACF"/><circle cx="40" cy="17" r="7" fill="#fff"/><circle cx="40" cy="47" r="7" fill="none" stroke="#fff" stroke-width="3.6"/><path d="M49 32h6" stroke="#FFE7BE" stroke-width="3.6" stroke-linecap="round"/><path d="M52 26.6L60.5 32L52 37.4z" fill="#FFE7BE"/></svg></div>
+    <div><h1>C-Floxer</h1><span>Flow Builder</span></div>
   </div>
   <div class="menuwrap navwrap">
     <button class="navbtn" id="btnNav" title="Trocar de área (Ctrl+M)">
@@ -1043,7 +1043,7 @@ table.grid select{font-size:11px}
       <div class="dd-title">Aparência do sistema</div>
       <button data-dd="temaUI">◑ Cor do sistema…</button>
       <button data-dd="modo" id="btnModo" title="Destaca os mais usados no topo da paleta">★ Destacar essenciais</button>
-      <button data-dd="marca" title="Ver, copiar e baixar a marca do C-Flow">◈ Marca do C-Flow…</button>
+      <button data-dd="marca" title="Ver, copiar e baixar a marca do C-Floxer">◈ Marca do C-Floxer…</button>
       <div class="dd-sep"></div>
       <div class="dd-title">Rascunho local</div>
       <button data-dd="salvar">💾 Salvar rascunho <span class="kbdi">Ctrl+S</span></button>
@@ -1195,7 +1195,7 @@ table.grid select{font-size:11px}
         (Início, Tarefa, Subprocesso, Decisão, Fim…). Em <b>Raia</b> informe quem executa — cada raia vira uma swimlane.
         Em <b>Vai para</b> use o nº da linha; para decisões, use <b>Sim:4 | Não:7</b> (rótulo:linha, separados por “|”).
         Deixe vazio para seguir a sequência natural.<br>
-        <b>Posições:</b> o desenho é atualizado enquanto você digita, mas o C-Flow <b>nunca move</b> o que você
+        <b>Posições:</b> o desenho é atualizado enquanto você digita, mas o C-Floxer <b>nunca move</b> o que você
         já posicionou à mão — só coloca no lugar os elementos novos. Para recalcular tudo, use <b>⇄ Reorganizar</b>.
       </div>
       <div class="tablewrap">
@@ -1230,7 +1230,7 @@ table.grid select{font-size:11px}
 <section class="view" id="view-processo">
   <div class="page">
     <h2>▦ Gerar processo</h2>
-    <p class="lead">A partir do que foi desenhado, o C-Flow gera a documentação do processo: ficha de identificação,
+    <p class="lead">A partir do que foi desenhado, o C-Floxer gera a documentação do processo: ficha de identificação,
       SIPOC, atores e raias, tabela de atividades, narrativa sequencial, regras de decisão, inventário de sistemas,
       leitura de automação (régua N|G|Q) e indicadores sugeridos — pronta para virar PO/IT.</p>
     <div class="bar" style="border:1px solid var(--line);border-radius:10px;margin-bottom:14px;background:#fff">
@@ -1260,7 +1260,7 @@ table.grid select{font-size:11px}
       <div class="card"><h4><span class="ext">HTM</span> HTML interativo</h4><p>Arquivo único com o diagrama e a ficha do processo — abre em qualquer navegador, sem instalação.</p><button class="btn primary" data-exp="html">Exportar HTML</button></div>
       <div class="card"><h4><span class="ext">XML</span> BPMN 2.0 (.bpmn)</h4><p>XML padrão OMG com process, laneSet, flowNodes, sequenceFlows e BPMNDI com waypoints.</p><button class="btn primary" data-exp="bpmn">Exportar BPMN</button></div>
       <div class="card"><h4><span class="ext">VDX</span> Visio (.vdx)</h4><p>Desenho XML do Visio com formas e rótulos. Se a licença bloquear, use o SVG — o Visio importa vetor nativamente.</p><button class="btn primary" data-exp="vdx">Exportar Visio</button></div>
-      <div class="card"><h4><span class="ext">JSN</span> Projeto C-Flow (.vbpm)</h4><p>Modelo completo, incluindo campos de negócio, portas e waypoints das setas. Formato de trabalho.</p><button class="btn primary" data-exp="vbpm">Salvar projeto</button></div>
+      <div class="card"><h4><span class="ext">JSN</span> Projeto C-Floxer (.vbpm)</h4><p>Modelo completo, incluindo campos de negócio, portas e waypoints das setas. Formato de trabalho.</p><button class="btn primary" data-exp="vbpm">Salvar projeto</button></div>
       <div class="card"><h4><span class="ext">PPT</span> Apresentação (.pptx)</h4><p>Deck executivo pronto: capa, indicadores, o fluxo em página inteira e um slide por etapa com responsável, sistema e descrição.</p><button class="btn primary" data-exp="pptx">Exportar PowerPoint</button></div>
       <div class="card"><h4><span class="ext">CSV</span> Tabela de atividades</h4><p>Lista de atividades, tipos, raias, sistemas e conexões — para Excel, Power BI ou anexo de PO.</p><button class="btn primary" data-exp="csv">Exportar CSV</button></div>
     </div>
@@ -1296,7 +1296,7 @@ table.grid select{font-size:11px}
       </div>
       <div class="card">
         <h4><span class="ext">⇥</span> Passo a passo</h4>
-        <p>Percorra o fluxo etapa por etapa com <b>→</b> e <b>←</b>. O C-Flow segue a ordem real do processo,
+        <p>Percorra o fluxo etapa por etapa com <b>→</b> e <b>←</b>. O C-Floxer segue a ordem real do processo,
           dá zoom na etapa e mostra o que é feito, por quem e em qual sistema.</p>
         <button class="btn" id="apStartStep">⇥ Apresentar passo a passo</button>
       </div>
@@ -1409,11 +1409,11 @@ table.grid select{font-size:11px}
 <div id="printArea" style="display:none"></div>
 <script>
 /* =========================================================================
-   C-Flow — Núcleo: catálogo BPMN 2.0, modelo, roteamento de conexões e render
+   C-Floxer — Núcleo: catálogo BPMN 2.0, modelo, roteamento de conexões e render
    ========================================================================= */
 "use strict";
 
-/* Identidade C-Flow: verde musgo com brancos; seleção em âmbar para contrastar */
+/* Identidade C-Floxer: verde musgo com brancos; seleção em âmbar para contrastar */
 const AZUL='#3D5142',      /* musgo escuro — traço padrão dos elementos */
       SEL ='#C08A3E',      /* âmbar — seleção, alças e destaques */
       ROXO='#5A7A66',      /* musgo médio — apoio */
@@ -2591,7 +2591,7 @@ function buildStandaloneSVG(m, opts){
   if(opts.header){
     head=`<rect x="0" y="0" width="${W}" height="46" fill="${PRETO}"/>`
        + (typeof logoAssinaturaSVG==='function' ? logoAssinaturaSVG(16, 8, 30, '#FFFFFF', '#FFFFFF', '#CBDACF', '#E0B978') : '')
-       + `<text x="212" y="28" font-size="15" font-weight="800" fill="#fff">${esc(m.meta.nome||'Processo')}</text>`
+       + `<text x="226" y="28" font-size="15" font-weight="800" fill="#fff">${esc(m.meta.nome||'Processo')}</text>`
        + `<text x="${W-18}" y="28" text-anchor="end" font-size="11" font-weight="600" fill="#A9B2CC">${esc(m.meta.area||'')} · ${esc(m.meta.tipo||'')} · v${esc(m.meta.versao||'1.0')} · ${esc(m.meta.data||'')}</text>`;
   }
   const corpo=`<rect width="${W}" height="${H}" fill="#fff"/>` + head
@@ -4563,7 +4563,7 @@ function renderProps(){
       <div class="field"><label>Regra de negócio detalhada</label><textarea id="e_cond">${esc(o.cond||'')}</textarea></div>
       <div class="divider"></div>
       <h3>Traçado da seta</h3>
-      <div class="sub">Escolha por qual lateral a seta sai e chega, ou deixe em <b>auto</b> para o C-Flow decidir.</div>
+      <div class="sub">Escolha por qual lateral a seta sai e chega, ou deixe em <b>auto</b> para o C-Floxer decidir.</div>
       <div class="field"><label>Sai de “${esc(s?s.name:'?')}” pela lateral</label>
         <div class="portsel" id="portSrc">${botoesPorta('srcPort')}</div></div>
       <div class="field"><label>Chega em “${esc(t?t.name:'?')}” pela lateral</label>
@@ -5661,7 +5661,7 @@ function atualizarEstadoSalvo(txt,cls){
 }
 function pacoteAtual(){
   if(typeof prepararComentariosParaSalvar==='function') prepararComentariosParaSalvar();
-  return {app:'C-Flow', formato:'vbpm', versaoFormato:4, gerado:new Date().toISOString(),
+  return {app:'C-Floxer', formato:'vbpm', versaoFormato:4, gerado:new Date().toISOString(),
           nome:model.meta.nome||'Sem nome', modelo:model};
 }
 function salvarRascunho(silencioso){
@@ -7834,7 +7834,7 @@ function miniaturaTemplate(tpl){
    TEMAS DE COR — padroniza todo o desenho de uma vez
    ========================================================================= */
 const TEMAS = [
-  {id:'musgo', nome:'Musgo', desc:'Padrão do C-Flow: verde sóbrio, ótimo para imprimir.',
+  {id:'musgo', nome:'Musgo', desc:'Padrão do C-Floxer: verde sóbrio, ótimo para imprimir.',
    borda:'', fundo:'', seta:'', amostra:['#3D5142','#6B8A72','#EEF4F0']},
 
   {id:'bpmn', nome:'BPMN clássico', desc:'Cores da notação: início verde, fim vermelho, decisão amarela.',
@@ -7948,7 +7948,7 @@ function aplicarTema(temaId, escopo){
   if(escopo!=='selecao'){
     model.temaAtual=temaId;
     temaPaleta=temaId;
-    try{ localStorage.setItem('cflow.tema', temaId); }catch(err){}
+    try{ localStorage.setItem('cfloxer.tema', temaId); }catch(err){}
     if(typeof buildPalette==='function') buildPalette();   /* paleta lateral acompanha */
   }
   pushHistory(); render(); renderProps();
@@ -8498,7 +8498,7 @@ function baixar(nome, conteudo, mime){
 }
 function nomeArq(ext){
   const base=(model.meta.nome||'processo').replace(/[^\wÀ-ÿ\- ]/g,'').trim().replace(/\s+/g,'_');
-  return `CFLOW_${base}_v${(model.meta.versao||'1.0').replace(/\./g,'-')}.${ext}`;
+  return `CFLOXER_${base}_v${(model.meta.versao||'1.0').replace(/\./g,'-')}.${ext}`;
 }
 function temDiagrama(){ if(!model.nodes.length){ toast('Nada para exportar — desenhe ou gere um diagrama antes','err'); return false; } return true; }
 
@@ -8537,7 +8537,7 @@ function montarPDF(jpegBase64, imgW, imgH){
   objs[1]='1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n';
   objs[2]='2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n';
   objs[3]=`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PW} ${PH}] /Resources << /XObject << /Im0 4 0 R >> /Font << /F1 6 0 R >> >> /Contents 5 0 R >>\nendobj\n`;
-  const stream=`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm /Im0 Do Q\nBT /F1 8 Tf 26 18 Td (C-Flow - Process Design System) Tj ET\n`;
+  const stream=`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm /Im0 Do Q\nBT /F1 8 Tf 26 18 Td (C-Floxer - Flow Builder) Tj ET\n`;
   objs[5]=`5 0 obj\n<< /Length ${stream.length} >>\nstream\n${stream}endstream\nendobj\n`;
   objs[6]='6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n';
   const imgHead=`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${bin.length} >>\nstream\n`;
@@ -8566,7 +8566,7 @@ function exportHTML(){
   if(!temDiagrama()) return;
   const svg=buildStandaloneSVG(model,{pad:40});
   const m=model.meta;
-  const html=`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>C-Flow · ${esc(m.nome)}</title>
+  const html=`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>C-Floxer · ${esc(m.nome)}</title>
 <style>body{font-family:' Sans','Mulish','Segoe UI',sans-serif;margin:0;background:#F4F6FB;color:#111317}
 header{background:linear-gradient(96deg,#111317,#1B1F3B 45%,#2D4AFF 130%);color:#fff;padding:16px 26px}
 header h1{margin:0;font-size:17px} header span{font-size:11.5px;opacity:.8}
@@ -8577,10 +8577,10 @@ td{border:1px solid #E3E7F2;padding:6px 8px;vertical-align:top}svg{max-width:100
 .kpi{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}.kpi div{background:#fff;border:1px solid #E3E7F2;border-radius:10px;padding:10px 16px}
 .kpi b{display:block;font-size:22px;color:#2D4AFF}.kpi span{font-size:10px;text-transform:uppercase;color:#5A6480;font-weight:700}
 footer{padding:14px 26px;color:#8A93AC;font-size:11px}</style></head><body>
-<header><h1>C-Flow · ${esc(m.nome)}</h1><span>${esc(m.area||'')} · ${esc(m.tipo||'')} · versão ${esc(m.versao||'')} · ${esc(m.data||'')}</span></header>
+<header><h1>C-Floxer · ${esc(m.nome)}</h1><span>${esc(m.area||'')} · ${esc(m.tipo||'')} · versão ${esc(m.versao||'')} · ${esc(m.data||'')}</span></header>
 <main><div class="kpi">${kpisHTML()}</div><div class="box">${svg}</div>
 <div class="box">${tabelaAtividadesHTML()}</div><div class="box">${narrativaHTML()}</div></main>
-<footer>Gerado pelo C-Flow — Process Design System </footer></body></html>`;
+<footer>Gerado pelo C-Floxer — Flow Builder </footer></body></html>`;
   baixar(nomeArq('html'),html,'text/html;charset=utf-8'); toast('HTML exportado','ok');
 }
 
@@ -8607,7 +8607,7 @@ function toBPMN(){
   const A=s=>esc(s);
   let x='';
   x+=`<?xml version="1.0" encoding="UTF-8"?>\n`;
-  x+=`<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:vbpm="http://cflow.app/ns" id="Definitions_1" targetNamespace="http://cflow.app/bpmn" exporter="C-Flow" exporterVersion="3.0">\n`;
+  x+=`<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:vbpm="http://cfloxer.app/ns" id="Definitions_1" targetNamespace="http://cfloxer.app/bpmn" exporter="C-Floxer" exporterVersion="3.0">\n`;
   x+=`  <bpmn:collaboration id="${COLL}">\n    <bpmn:participant id="Participant_1" name="${A(m.meta.nome)}" processRef="${PID}" />\n`;
   msg.forEach(e=>{ x+=`    <bpmn:messageFlow id="${e.id}" name="${A(e.name)}" sourceRef="${e.source}" targetRef="${e.target}" />\n`; });
   x+=`  </bpmn:collaboration>\n`;
@@ -8713,7 +8713,7 @@ function exportVDX(){
   });
   const vdx=`<?xml version="1.0" encoding="utf-8"?>
 <VisioDocument xmlns="http://schemas.microsoft.com/visio/2003/core" xml:space="preserve">
-<DocumentProperties><Title>${esc(model.meta.nome)}</Title><Creator>C-Flow</Creator></DocumentProperties>
+<DocumentProperties><Title>${esc(model.meta.nome)}</Title><Creator>C-Floxer</Creator></DocumentProperties>
 <Pages><Page ID="0" NameU="${esc(model.meta.nome||'Processo')}">
 <PageSheet><PageProps><PageWidth>${((b.w+120)/PX).toFixed(4)}</PageWidth><PageHeight>${H.toFixed(4)}</PageHeight></PageProps></PageSheet>
 <Shapes>
@@ -8725,7 +8725,7 @@ function exportVBPM(){
   if(typeof prepararComentariosParaSalvar==='function') prepararComentariosParaSalvar();
   const pi=pesoImagens();
   if(pi.mb>5) toast(`Atenção: ${pi.qtd} imagem(ns) somam ${pi.mb.toFixed(1)} MB — o arquivo ficará grande`,'err');
-  const pacote={app:'C-Flow',formato:'vbpm',versaoFormato:4,gerado:new Date().toISOString(),modelo:model};
+  const pacote={app:'C-Floxer',formato:'vbpm',versaoFormato:4,gerado:new Date().toISOString(),modelo:model};
   baixar(nomeArq('vbpm'),JSON.stringify(pacote,null,2),'application/json;charset=utf-8'); toast('Projeto salvo','ok');
 }
 function exportCSV(){
@@ -8762,7 +8762,7 @@ function importarJSON(txt,nome){
   model.tabela=m.tabela||[]; model.sugestoes=[]; model.comentarios=m.comentarios||[];
   normalizarConexoes();
   if(typeof reporComentarios==='function') reporComentarios();
-  posImport(nome,'Projeto C-Flow');
+  posImport(nome,'Projeto C-Floxer');
 }
 function normalizarConexoes(){
   model.edges.forEach(e=>{
@@ -8784,7 +8784,7 @@ function importarBPMN(txt,nome){
   const docEl=L(proc,'documentation')[0]; if(docEl&&docEl.parentNode===proc) m.meta.objetivo=docEl.textContent.trim();
   const inversa={};
   Object.keys(BPMN_MAP).forEach(k=>{ const v=BPMN_MAP[k]; inversa[v.el+'|'+(v.def||'')]=k; });
-  const at=(el,n)=>el.getAttribute('vbpm:'+n)||el.getAttributeNS('http://cflow.app/ns',n)||'';
+  const at=(el,n)=>el.getAttribute('vbpm:'+n)||el.getAttributeNS('http://cfloxer.app/ns',n)||'';
   const nos=[...proc.children].filter(el=>!['laneSet','sequenceFlow','association','documentation','extensionElements'].includes(el.localName));
   nos.forEach(el=>{
     let tipo=at(el,'type');
@@ -8914,7 +8914,7 @@ function posImport(nome,formato){
    PRIMEIROS PASSOS — boas-vindas, tour guiado e modo simples
    ========================================================================= */
 
-const OB_KEY='cflow.onboarding.v1';
+const OB_KEY='cfloxer.onboarding.v1';
 let onb={};
 function lerOnb(){
   let d={};
@@ -8981,12 +8981,12 @@ function ehEssencial(k){ return TIPOS_SIMPLES.includes(k); }
    BOAS-VINDAS
    ========================================================================= */
 function modalBoasVindas(){
-  abrirModal('Bem-vindo ao C-Flow',
+  abrirModal('Bem-vindo ao C-Floxer',
     `<div class="ob-hero">
        <div class="ob-hero-ico">◈</div>
        <div>
          <b>Desenhe processos sem precisar saber BPMN.</b>
-         <span>O C-Flow monta o desenho, confere as regras da notação e ainda gera a documentação escrita.
+         <span>O C-Floxer monta o desenho, confere as regras da notação e ainda gera a documentação escrita.
            Tudo roda no seu navegador — nada é enviado para fora.</span>
        </div>
      </div>
@@ -9055,7 +9055,7 @@ const PASSOS_TOUR = [
     texto:'Selecione um elemento e descreva aqui <b>o que é feito, por quem e em qual sistema</b>. '+
           'É esse preenchimento que alimenta a documentação escrita depois.' },
   { alvo:'#btnNav', pos:'baixo', titulo:'5. As áreas de trabalho',
-    texto:'Além de desenhar, o C-Flow tem a <b>modelagem guiada</b> (você descreve em tabela e o desenho nasce sozinho), '+
+    texto:'Além de desenhar, o C-Floxer tem a <b>modelagem guiada</b> (você descreve em tabela e o desenho nasce sozinho), '+
           'a geração de <b>documentação</b>, a <b>exportação</b> e o <b>modo apresentação</b> para telão.' },
   { alvo:'#btnArquivo', pos:'baixo', titulo:'6. Começar, salvar e exportar',
     texto:'Em <b>Novo</b> há modelos prontos para cada tipo de desenho. Seu trabalho é salvo sozinho no navegador, '+
@@ -9643,7 +9643,7 @@ function atualizarNomeTopo(){
    ========================================================================= */
 const TEMAS_UI = [
   /* ---- monocromáticos: uma cor em escala, como o padrão atual ---- */
-  {id:'musgo', nome:'Musgo', grupo:'mono', desc:'Padrão do C-Flow — verde sóbrio em escala.',
+  {id:'musgo', nome:'Musgo', grupo:'mono', desc:'Padrão do C-Floxer — verde sóbrio em escala.',
    v:{'--musgo-9':'#233029','--musgo-8':'#2F3E34','--musgo-7':'#3D5142','--musgo-6':'#4F6355',
       '--musgo-5':'#6B8A72','--musgo-4':'#8FA896','--musgo-3':'#A8BFAE','--musgo-2':'#CBDACF',
       '--musgo-1':'#E4EDE7','--musgo-0':'#F2F7F3','--acao':'#3D5142','--acao-h':'#2F3E34',
@@ -9744,7 +9744,7 @@ const TEMAS_UI = [
       '--topo':'linear-gradient(100deg,#0B1220 0%,#162034 50%,#243149 115%)'}}
 ];
 
-const UI_KEY='cflow.temaUI';
+const UI_KEY='cfloxer.temaUI';
 let temaUIAtual='musgo';
 
 function aplicarTemaUI(id, silencioso){
@@ -10263,7 +10263,7 @@ async function exportPPTX(){
     c+=pptTexto(7, px(64), px(345), px(920), px(80),
       [{t:m.objetivo||'', sz:1200, cor:C.claro}]);
     c+=pptTexto(8, px(64), px(640), px(600), px(40),
-      [{t:'C-Flow · Process Design System   ·   '+(m.data||''), sz:1000, cor:C.claro}]);
+      [{t:'C-Floxer · Flow Builder   ·   '+(m.data||''), sz:1000, cor:C.claro}]);
     slides.push(c); relsArr.push(relsSlide());
 
     /* ---------- slide 2: indicadores ---------- */
@@ -10349,7 +10349,7 @@ async function exportPPTX(){
       c+=pptTexto(fid++, px(90), yy+px(28), px(1080), px(30), [{t:x.d, sz:1100, cor:C.texto2}]);
     });
     c+=pptTexto(fid++, px(64), px(660), px(900), px(30),
-      [{t:'Gerado pelo C-Flow · Process Design System', sz:950, cor:C.texto2}]);
+      [{t:'Gerado pelo C-Floxer · Flow Builder', sz:950, cor:C.texto2}]);
     slides.push(c); relsArr.push(relsSlide());
 
     /* ---------- empacota o .pptx ---------- */
@@ -10380,16 +10380,16 @@ ${slides.map((_,i)=>`<Override PartName="/ppt/slides/slide${i+1}.xml" ContentTyp
 ${slides.map((_,i)=>`<Relationship Id="rId${i+2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i+1}.xml"/>`).join('')}
 </Relationships>`});
     const temaXML=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="C-Flow">
-<a:themeElements><a:clrScheme name="C-Flow"><a:dk1><a:srgbClr val="${C.escuro.replace('#','')}"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="C-Floxer">
+<a:themeElements><a:clrScheme name="C-Floxer"><a:dk1><a:srgbClr val="${C.escuro.replace('#','')}"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1>
 <a:dk2><a:srgbClr val="${C.medio.replace('#','')}"/></a:dk2><a:lt2><a:srgbClr val="${C.papel.replace('#','')}"/></a:lt2>
 <a:accent1><a:srgbClr val="${C.medio.replace('#','')}"/></a:accent1><a:accent2><a:srgbClr val="${C.acento.replace('#','')}"/></a:accent2>
 <a:accent3><a:srgbClr val="6B8A72"/></a:accent3><a:accent4><a:srgbClr val="2C6E9E"/></a:accent4>
 <a:accent5><a:srgbClr val="C0392B"/></a:accent5><a:accent6><a:srgbClr val="D4A017"/></a:accent6>
 <a:hlink><a:srgbClr val="1F6FEB"/></a:hlink><a:folHlink><a:srgbClr val="7B3FF2"/></a:folHlink></a:clrScheme>
-<a:fontScheme name="C-Flow"><a:majorFont><a:latin typeface="Inter"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>
+<a:fontScheme name="C-Floxer"><a:majorFont><a:latin typeface="Inter"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>
 <a:minorFont><a:latin typeface="Inter"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme>
-<a:fmtScheme name="C-Flow"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+<a:fmtScheme name="C-Floxer"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
 <a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst>
 <a:lnStyleLst><a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>
 <a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>
@@ -10422,7 +10422,7 @@ ${slides.map((_,i)=>`<Relationship Id="rId${i+2}" Type="http://schemas.openxmlfo
       arq.push({nome:`ppt/slides/_rels/slide${i+1}.xml.rels`, txt:relsArr[i]});
     });
     media.forEach(md=>arq.push({nome:'ppt/media/'+md.nome, bin:md.bytes}));
-    if(LOGO_PNG_BYTES) arq.push({nome:'ppt/media/cflow-logo.png', bin:LOGO_PNG_BYTES});
+    if(LOGO_PNG_BYTES) arq.push({nome:'ppt/media/cfloxer-logo.png', bin:LOGO_PNG_BYTES});
 
     baixar(nomeArq('pptx'), zipCriar(arq));
     toast(`Apresentação com ${N} slides exportada`,'ok');
@@ -10581,7 +10581,7 @@ function riscosHTML(){
   return `${r.length?`<table><thead><tr><th>Etapa</th><th>Executor</th><th>Risco / ponto de atenção</th><th>Controle sugerido</th></tr></thead><tbody>`+
     r.map(n=>`<tr><td>${esc(n.name)}</td><td>${esc(respDe(n))}</td><td>${esc(n.risco)}</td><td>${n.type==='manualTask'||n.type==='userTask'?'Padronizar critério e registrar evidência em sistema':'Monitorar exceções e log de execução'}</td></tr>`).join('')+
     `</tbody></table>`:'<p>Nenhum risco registrado nas etapas. Use o campo <i>Risco / ponto de atenção</i> no painel de propriedades.</p>'}
-    <h3>Lacunas identificadas pelo C-Flow</h3>
+    <h3>Lacunas identificadas pelo C-Floxer</h3>
     <ul>${gaps.slice(0,14).map(g=>`<li><b>${esc(g.t)}</b> — ${esc(g.d)}</li>`).join('')||'<li>Nenhuma lacuna estrutural identificada.</li>'}</ul>`;
 }
 function gerarDoc(){
@@ -10592,7 +10592,7 @@ function gerarDoc(){
   const diag=$('#pgIncDiag').checked?`<h2>2. Fluxo BPMN 2.0</h2><div style="overflow:auto;border:1px solid #E3E7F2;border-radius:10px;padding:8px">${buildStandaloneSVG(model,{pad:30}).replace('<svg width','<svg style="max-width:100%;height:auto" data-w')}</div>`:'';
   $('#docOut').innerHTML=`<div class="doc" id="docBody">
     <h1>${esc(m.nome||'Processo sem nome')}</h1>
-    <div class="metaline">${esc(m.area||'Área não informada')} · ${esc(m.tipo||'AS-IS')} · versão ${esc(m.versao||'1.0')} · ${esc(m.data||hoje())} · elaborado no C-Flow</div>
+    <div class="metaline">${esc(m.area||'Área não informada')} · ${esc(m.tipo||'AS-IS')} · versão ${esc(m.versao||'1.0')} · ${esc(m.data||hoje())} · elaborado no C-Floxer</div>
     <div class="kpi">${kpisHTML()}</div>
     <h2>1. Identificação do processo</h2>
     <table><tbody>
@@ -10624,7 +10624,7 @@ function gerarDoc(){
     <h2>12. Controle do documento</h2>
     <table><thead><tr><th>Versão</th><th>Data</th><th>Elaborado por</th><th>Natureza</th><th>Observação</th></tr></thead>
     <tbody><tr><td>${esc(m.versao||'1.0')}</td><td>${esc(m.data||hoje())}</td><td>${esc(m.autor||'—')}</td><td>${esc(m.tipo||'AS-IS')}</td>
-    <td>Documento gerado automaticamente pelo C-Flow a partir do diagrama BPMN 2.0. Revisar antes da publicação como PO/IT.</td></tr></tbody></table>
+    <td>Documento gerado automaticamente pelo C-Floxer a partir do diagrama BPMN 2.0. Revisar antes da publicação como PO/IT.</td></tr></tbody></table>
   </div>`;
   toast('Documentação gerada','ok');
 }
@@ -10641,7 +10641,7 @@ function docParaArquivo(){
   .kpi b{display:block;font-size:19px;color:#2D4AFF}.kpi span{font-size:9.5px;text-transform:uppercase;color:#5A6480;font-weight:700}
   .tag{background:#EEF1FD;color:#2D4AFF;border-radius:4px;padding:1px 5px;font-size:9.5px;font-weight:800;margin-right:3px}
   svg{max-width:100%;height:auto}li{margin-bottom:4px;font-size:12px}</style></head><body>${b.innerHTML}
-  <p style="color:#8A93AC;font-size:10.5px;margin-top:26px">Gerado pelo C-Flow — Process Design System </p></body></html>`;
+  <p style="color:#8A93AC;font-size:10.5px;margin-top:26px">Gerado pelo C-Floxer — Flow Builder </p></body></html>`;
 }
 
 /* ---------- Modais ---------- */
@@ -10683,7 +10683,7 @@ function modalFicha(){
 function modalGuia(){
   const linhas=Object.keys(T).map(k=>`<tr><td style="width:64px">${miniShape(k)}</td><td><b>${esc(T[k].label)}</b><br><span style="color:#5A6480;font-size:11.5px">${esc(T[k].tip)}</span></td></tr>`).join('');
   const conex=Object.keys(EDGE_T).map(k=>`<tr><td><b>${esc(EDGE_T[k].label)}</b></td><td style="color:#5A6480">${esc(EDGE_T[k].tip)}</td></tr>`).join('');
-  abrirModal('Guia rápido — BPMN 2.0 e uso do C-Flow',`
+  abrirModal('Guia rápido — BPMN 2.0 e uso do C-Floxer',`
     <p style="color:#5A6480;margin-top:0">Cinco regras que resolvem 90% dos erros: todo fluxo tem <b>um início</b> e <b>um fim</b>;
     atividade se escreve com <b>verbo no infinitivo + objeto</b> (“Conferir nota fiscal”); decisão se escreve como <b>pergunta</b> e cada saída
     recebe a <b>condição</b>; quem executa fica claro pela <b>raia</b>; e o que atravessa participantes diferentes é <b>fluxo de mensagem</b>.</p>
@@ -10803,7 +10803,7 @@ function modalGuia(){
     <ul style="font-size:12.3px;line-height:1.6;color:#3A4257">
       <li>Solte <b>uma ou várias</b> imagens sobre a área de desenho: elas entram organizadas em grade,
         sem sobreposição, já selecionadas para você reposicionar de uma vez.</li>
-      <li>Enquanto arrasta, o C-Flow mostra para onde a imagem vai cair — e avisa quando o destino é
+      <li>Enquanto arrasta, o C-Floxer mostra para onde a imagem vai cair — e avisa quando o destino é
         a tela de um dispositivo.</li>
     </ul>
     <h3 style="margin:14px 0 6px">Prints de sistema no fluxo</h3>
@@ -10852,7 +10852,7 @@ function init(){
   initDropImagem();
   initSplitters();
   initCtxMenu();
-  try{ const tv=localStorage.getItem('cflow.tema'); if(tv&&temaPorId(tv)) temaPaleta=tv; }catch(e){}
+  try{ const tv=localStorage.getItem('cfloxer.tema'); if(tv&&temaPorId(tv)) temaPaleta=tv; }catch(e){}
   initMenuArquivo();
   initTemaUI();
   atualizarNomeTopo();
@@ -11091,7 +11091,7 @@ document.addEventListener('DOMContentLoaded',init);
 </script>
 <script>
 /* =========================================================================
-   C-Flow v21 — Logomarca · Telas de dispositivo · Imagens fluidas ·
+   C-Floxer v21 — Logomarca · Telas de dispositivo · Imagens fluidas ·
                 Paleta em lista · Comentários no .vbpm · Marca nas exportações
    Nada das versões anteriores é removido: tudo aqui acrescenta ou corrige.
    ========================================================================= */
@@ -11132,9 +11132,9 @@ function logoAssinaturaSVG(x, y, tam, corTxt, corMarca, corApoio, corSeta){
   return `<g transform="translate(${x},${y})" style="pointer-events:none">`
     + logoGrupoSVG(0, 0, t, corMarca||corTxt, corApoio, corSeta)
     + `<text x="${t+9}" y="${t*0.46}" font-size="${(t*0.52).toFixed(1)}" font-weight="800" `
-    + `fill="${corTxt}" font-family="'Inter','Segoe UI',sans-serif" letter-spacing=".2">C-Flow</text>`
+    + `fill="${corTxt}" font-family="'Inter','Segoe UI',sans-serif" letter-spacing=".2">C-Floxer</text>`
     + `<text x="${t+9}" y="${t*0.86}" font-size="${(t*0.30).toFixed(1)}" font-weight="600" `
-    + `fill="${corTxt}" opacity=".72" font-family="'Inter','Segoe UI',sans-serif" letter-spacing=".6">PROCESS DESIGN SYSTEM</text>`
+    + `fill="${corTxt}" opacity=".72" font-family="'Inter','Segoe UI',sans-serif" letter-spacing=".6">FLOW BUILDER</text>`
     + `</g>`;
 }
 /* SVG autônomo da assinatura — vira PNG para Word e PowerPoint */
@@ -11153,7 +11153,7 @@ function aplicarLogoTopo(){
   if(!el) return;
   el.innerHTML=`<svg width="24" height="24" viewBox="0 0 64 64">${logoMarcaSVG('#fff','#FFFFFF','#FFE7BE')}</svg>`;
   el.style.padding='0';
-  el.setAttribute('title','C-Flow — Process Design System');
+  el.setAttribute('title','C-Floxer — Flow Builder');
 }
 
 /* ---- versão rasterizada, usada nas exportações que não aceitam SVG ---- */
@@ -11793,7 +11793,7 @@ function exportHTML(){
   const svg=buildStandaloneSVG(model,{pad:40});
   const m=model.meta;
   const marca=`<svg width="46" height="46" viewBox="0 0 64 64" style="flex:0 0 46px">${logoMarcaSVG('#fff','#CBDACF','#E0B978')}</svg>`;
-  const html=`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>C-Flow · ${esc(m.nome)}</title>
+  const html=`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>C-Floxer · ${esc(m.nome)}</title>
 <style>body{font-family:'Inter','Segoe UI',sans-serif;margin:0;background:#F4F8F5;color:#233029}
 header{background:linear-gradient(100deg,#233029,#33453A 50%,#4A6152 115%);color:#fff;padding:16px 26px;
   display:flex;align-items:center;gap:14px}
@@ -11810,11 +11810,11 @@ footer{padding:14px 26px;color:#94A89A;font-size:11px;display:flex;align-items:c
 footer svg{flex:0 0 22px}</style></head><body>
 <header>${marca}<div style="flex:1"><h1>${esc(m.nome)}</h1>
 <span>${esc(m.area||'')} · ${esc(m.tipo||'')} · versão ${esc(m.versao||'')} · ${esc(m.data||'')}</span></div>
-<div class="mk" style="text-align:right"><b>C-Flow</b><i>PROCESS DESIGN SYSTEM</i></div></header>
+<div class="mk" style="text-align:right"><b>C-Floxer</b><i>FLOW BUILDER</i></div></header>
 <main><div class="kpi">${kpisHTML()}</div><div class="box">${svg}</div>
 <div class="box">${tabelaAtividadesHTML()}</div><div class="box">${narrativaHTML()}</div></main>
 <footer><svg width="22" height="22" viewBox="0 0 64 64">${logoMarcaSVG('#4F6355','#8FA896','#C08A3E')}</svg>
-Gerado pelo C-Flow — Process Design System</footer></body></html>`;
+Gerado pelo C-Floxer — Flow Builder</footer></body></html>`;
   baixar(nomeArq('html'),html,'text/html;charset=utf-8'); toast('HTML exportado com a marca do sistema','ok');
 }
 
@@ -11823,8 +11823,8 @@ function docParaArquivo(){
   if(!$('#docBody')) gerarDoc();
   const b=$('#docBody'); if(!b) return null;
   const marcaImg = LOGO_PNG
-    ? `<img src="${LOGO_PNG}" alt="C-Flow" style="height:34px">`
-    : `<span style="font-size:16px;font-weight:800;color:#3D5142">C-Flow</span>`;
+    ? `<img src="${LOGO_PNG}" alt="C-Floxer" style="height:34px">`
+    : `<span style="font-size:16px;font-weight:800;color:#3D5142">C-Floxer</span>`;
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(model.meta.nome)}</title>
   <style>body{font-family:'Inter','Segoe UI',sans-serif;color:#233029;margin:26px;line-height:1.6}
   h1{font-size:21px;margin:0 0 4px}h2{font-size:15px;color:#3D5142;border-bottom:2px solid #3D5142;padding-bottom:4px;margin:22px 0 8px}
@@ -11840,7 +11840,7 @@ function docParaArquivo(){
   </style></head><body>
   <div class="cf-cab">${marcaImg}</div>
   ${b.innerHTML}
-  <div class="cf-rod">Documento gerado pelo <b>C-Flow — Process Design System</b> · ${esc(model.meta.nome||'')} · ${esc(model.meta.data||'')}</div>
+  <div class="cf-rod">Documento gerado pelo <b>C-Floxer — Flow Builder</b> · ${esc(model.meta.nome||'')} · ${esc(model.meta.data||'')}</div>
   </body></html>`;
 }
 
@@ -11848,7 +11848,7 @@ function docParaArquivo(){
 function relsSlide(imgs){
   const rl=(imgs||[]).map((im,i)=>`<Relationship Id="rId${i+2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${im}"/>`).join('');
   const marca = LOGO_PNG_BYTES
-    ? `<Relationship Id="rId90" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/cflow-logo.png"/>` : '';
+    ? `<Relationship Id="rId90" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/cfloxer-logo.png"/>` : '';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>${rl}${marca}</Relationships>`;
@@ -11933,7 +11933,7 @@ if(typeof TEMPLATES!=='undefined' && Array.isArray(TEMPLATES)){
 
 <script>
 /* =========================================================================
-   C-Flow v23 — Correção do menu Arquivo · Cores do sistema ampliadas ·
+   C-Floxer v23 — Correção do menu Arquivo · Cores do sistema ampliadas ·
                 Colar imagem de fora · Abertura com a marca · Marca ampliada
    Nada anterior é removido: tudo aqui corrige ou acrescenta.
    ========================================================================= */
@@ -12266,7 +12266,7 @@ async function inserirImagemPorURL(url, pos){
 /* =========================================================================
    4) ABERTURA COM A MARCA — fade rápido, sem atrapalhar
    ========================================================================= */
-const SPLASH_KEY='cflow.splash.v1';
+const SPLASH_KEY='cfloxer.splash.v1';
 function mostrarSplash(){
   if(document.getElementById && document.getElementById('splash')) return;
   const d=document.createElement('div');
@@ -12275,8 +12275,8 @@ function mostrarSplash(){
       <div class="sp-marca"><svg width="104" height="104" viewBox="0 0 64 64">
         ${logoMarcaSVG('#FFFFFF','#CBDACF','#E0B978')}</svg></div>
       <div style="text-align:center">
-        <div class="sp-nome">C-Flow</div>
-        <div class="sp-sub">Process Design System</div>
+        <div class="sp-nome">C-Floxer</div>
+        <div class="sp-sub">Flow Builder</div>
       </div>
       <div class="sp-barra"><i></i></div>
     </div>`;
@@ -12307,8 +12307,8 @@ function marcaGrandeSVG(variante){
   /* a moldura acompanha o texto: o descritor é a linha mais larga */
   const t=104, m=28;
   /* fator de 0.76 por caractere cobre com folga a fonte em caixa alta e peso 600 */
-  const larguraNome = 6 * (t*0.52) * 0.64;                       /* “C-Flow” */
-  const larguraDesc = 21 * (t*0.30) * 0.76 + 21 * 0.6;           /* “PROCESS DESIGN SYSTEM” */
+  const larguraNome = 6 * (t*0.52) * 0.64;                       /* “C-Floxer” */
+  const larguraDesc = 21 * (t*0.30) * 0.76 + 21 * 0.6;           /* “FLOW BUILDER” */
   const W=Math.round(t + 9 + Math.max(larguraNome, larguraDesc) + m*2);
   const H=Math.round(t + 44);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`
@@ -12318,7 +12318,7 @@ function marcaGrandeSVG(variante){
 }
 function modalMarca(){
   const fundo = mkVariante==='escuro'||mkVariante==='branca' ? 'escuro' : (mkVariante==='mono'?'papel':'claro');
-  abrirModal('◈ Marca do C-Flow',
+  abrirModal('◈ Marca do C-Floxer',
     `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">O “C” é a própria trilha do processo: dois trechos de
       conexão, a etapa encaixada no vão, o evento de início no topo, o de fim embaixo e a saída com ponta de seta.
       Use à vontade em apresentações e documentos.</p>
@@ -12349,17 +12349,17 @@ function modalMarca(){
     repintar();
   });
   const bs=$('#mkSvg');
-  if(bs) bs.onclick=()=>{ baixar('C-Flow_marca_'+mkVariante+'.svg', marcaGrandeSVG(), 'image/svg+xml;charset=utf-8');
+  if(bs) bs.onclick=()=>{ baixar('C-Floxer_marca_'+mkVariante+'.svg', marcaGrandeSVG(), 'image/svg+xml;charset=utf-8');
     toast('SVG da marca baixado','ok'); };
   const bp=$('#mkPng');
   if(bp) bp.onclick=()=>marcaParaPNG(marcaGrandeSVG(), 3, b=>{
-    baixar('C-Flow_marca_'+mkVariante+'.png', b); toast('PNG da marca baixado','ok'); });
+    baixar('C-Floxer_marca_'+mkVariante+'.png', b); toast('PNG da marca baixado','ok'); });
   const bi=$('#mkIcone');
   if(bi) bi.onclick=()=>{
     const conf={claro:['#3D5142','#6B8A72','#C08A3E'], escuro:['#FFFFFF','#CBDACF','#E0B978'],
                 mono:['#233029','#233029','#233029'], branca:['#FFFFFF','#FFFFFF','#FFFFFF']}[mkVariante];
     const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64">${logoMarcaSVG(conf[0],conf[1],conf[2])}</svg>`;
-    marcaParaPNG(svg, 2, b=>{ baixar('C-Flow_icone_'+mkVariante+'.png', b); toast('Ícone baixado','ok'); });
+    marcaParaPNG(svg, 2, b=>{ baixar('C-Floxer_icone_'+mkVariante+'.png', b); toast('Ícone baixado','ok'); });
   };
   const bc=$('#mkCopiar');
   if(bc) bc.onclick=()=>marcaParaPNG(marcaGrandeSVG(), 3, async b=>{
@@ -12369,7 +12369,7 @@ function modalMarca(){
         toast('Marca copiada — cole no PowerPoint, Word ou Teams','ok');
       } else throw new Error('sem suporte');
     }catch(e){
-      baixar('C-Flow_marca_'+mkVariante+'.png', b);
+      baixar('C-Floxer_marca_'+mkVariante+'.png', b);
       toast('O navegador não permitiu copiar — a imagem foi baixada','ok');
     }
   });
@@ -12406,7 +12406,7 @@ function initV23(){
   const logo=document.querySelector('.brand .logo');
   if(logo){
     logo.onclick=modalMarca;
-    logo.setAttribute('title','Marca do C-Flow — clique para ampliar, copiar ou baixar');
+    logo.setAttribute('title','Marca do C-Floxer — clique para ampliar, copiar ou baixar');
   }
   /* menu de contexto do canvas ganha “Novo…” e “Colar imagem” */
   if(typeof execCtx==='function' && !execCtx._v23){
@@ -12457,14 +12457,14 @@ function initV23(){
 </script>
 <script>
 /* =========================================================================
-   C-Flow v24 — SESSÃO COMPARTILHADA (até 10 participantes)
+   C-Floxer v24 — SESSÃO COMPARTILHADA (até 10 participantes)
    Conexão direta entre navegadores (WebRTC). Nada é enviado a servidor
    próprio: apenas a sinalização inicial passa por um intermediário, e há
    o modo manual para redes que bloqueiam qualquer conexão persistente.
    ========================================================================= */
 
 const SESSAO_MAX = 10;                 /* teto de participantes por sala */
-const SESSAO_CHAVE = 'cflow.sessao.v1';
+const SESSAO_CHAVE = 'cfloxer.sessao.v1';
 
 /* estado da sessão */
 let ss = {
@@ -12492,13 +12492,13 @@ function idAleatorio(n){
 }
 function nomeParticipante(){
   try{
-    const g=localStorage.getItem('cflow.meuNome');
+    const g=localStorage.getItem('cfloxer.meuNome');
     if(g) return g;
   }catch(e){}
   return (typeof revisao!=='undefined' && revisao.autor) ? revisao.autor : 'Participante';
 }
 function definirMeuNome(n){
-  try{ localStorage.setItem('cflow.meuNome', n); }catch(e){}
+  try{ localStorage.setItem('cfloxer.meuNome', n); }catch(e){}
   if(ss.eu) ss.eu.nome=n;
 }
 function corDoPar(i){ return CORES_PARES[i % CORES_PARES.length]; }
@@ -13039,7 +13039,7 @@ function modalSessao(){
   abrirModal('👥 Sessão compartilhada',
     `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">
        Permite que até <b>${SESSAO_MAX} pessoas</b> desenhem no mesmo diagrama ao mesmo tempo.
-       A conexão é <b>direta entre os navegadores</b> — o C-Flow não guarda nada em servidor.</p>
+       A conexão é <b>direta entre os navegadores</b> — o C-Floxer não guarda nada em servidor.</p>
      <div class="dica-inline" style="border-left-color:var(--sel);background:#FDF8EF">
        Com a sessão ativa, o desenho <b>trafega entre os participantes</b>. Isso é diferente do uso
        individual, em que nada sai da sua máquina. Use apenas com quem pode ver o conteúdo.
@@ -13213,7 +13213,7 @@ function initSessao(){
 </script>
 <script>
 /* =========================================================================
-   C-Flow v24 — MODELOS PRONTOS ROBUSTOS
+   C-Floxer v24 — MODELOS PRONTOS ROBUSTOS
    Cronograma · Design Thinking · App/Telas · Roadmap
    Construídos nos formatos que o mercado usa de fato.
    ========================================================================= */
@@ -13686,4 +13686,279 @@ TEMPLATES.push(
 </script>
 
 
+<script>
+/* =========================================================================
+   C-Floxer v25 — Identidade nova e abertura que constrói um fluxo
+   Sucede o C-Flow. Tudo que existia continua; aqui só se acrescenta e renomeia.
+   ========================================================================= */
+
+/* =========================================================================
+   1) A MARCA — o C como construtor: um caminho entra, dois saem
+   O quadrado à esquerda é a etapa de entrada; o arco é a trilha; os dois
+   nós à direita são as saídas ramificadas — o gesto de construir um fluxo.
+   ========================================================================= */
+function logoMarcaSVG(cor, corApoio, corSeta){
+  const c  = cor      || '#FFFFFF';
+  const c2 = corApoio || c;
+  const c3 = corSeta  || c;
+  return ''
+    /* trilha do processo, partida em dois trechos */
+    + `<path d="M41 16A18 18 0 0 0 13 27" fill="none" stroke="${c}" stroke-width="6.4" stroke-linecap="round"/>`
+    + `<path d="M13 37A18 18 0 0 0 41 48" fill="none" stroke="${c}" stroke-width="6.4" stroke-linecap="round"/>`
+    /* etapa de entrada, encaixada no vão do C */
+    + `<rect x="4.6" y="25.5" width="17" height="13" rx="3.6" fill="${c2}"/>`
+    /* saída superior: evento cheio */
+    + `<circle cx="41" cy="16" r="6.2" fill="${c}"/>`
+    /* saída inferior: evento vazado, como manda a notação */
+    + `<circle cx="41" cy="48" r="6.4" fill="none" stroke="${c}" stroke-width="3.1"/>`
+    /* as duas conexões que saem — a ramificação que dá nome ao sistema */
+    + `<path d="M48 16h4.6" stroke="${c3}" stroke-width="3" stroke-linecap="round"/>`
+    + `<path d="M50.6 12.4L57.2 16L50.6 19.6z" fill="${c3}"/>`
+    + `<path d="M48.4 48h4.6" stroke="${c3}" stroke-width="3" stroke-linecap="round"/>`
+    + `<path d="M50.6 44.4L57.2 48L50.6 51.6z" fill="${c3}"/>`;
+}
+/* versão compacta: abaixo de 40px as duas setas se fundem, então usa-se uma só */
+function logoMiniSVG(cor, corApoio, corSeta){
+  const c  = cor      || '#FFFFFF';
+  const c2 = corApoio || c;
+  const c3 = corSeta  || c;
+  return ''
+    + `<path d="M40 17A17 17 0 0 0 14 27.5" fill="none" stroke="${c}" stroke-width="7.6" stroke-linecap="round"/>`
+    + `<path d="M14 36.5A17 17 0 0 0 40 47" fill="none" stroke="${c}" stroke-width="7.6" stroke-linecap="round"/>`
+    + `<rect x="4" y="24.6" width="18" height="14.8" rx="4" fill="${c2}"/>`
+    + `<circle cx="40" cy="17" r="7" fill="${c}"/>`
+    + `<circle cx="40" cy="47" r="7" fill="none" stroke="${c}" stroke-width="3.6"/>`
+    + `<path d="M49 32h6" stroke="${c3}" stroke-width="3.6" stroke-linecap="round"/>`
+    + `<path d="M52 26.6L60.5 32L52 37.4z" fill="${c3}"/>`;
+}
+/* escolhe a variante conforme o tamanho de exibição */
+function logoPorTamanho(tam, cor, corApoio, corSeta){
+  return (tam && tam < 40) ? logoMiniSVG(cor, corApoio, corSeta)
+                           : logoMarcaSVG(cor, corApoio, corSeta);
+}
+function logoGrupoSVG(x, y, tam, cor, corApoio, corSeta){
+  const k=(tam||32)/64;
+  return `<g transform="translate(${x},${y}) scale(${k.toFixed(4)})" style="pointer-events:none">`
+       + logoPorTamanho(tam, cor, corApoio, corSeta) + `</g>`;
+}
+function logoAssinaturaSVG(x, y, tam, corTxt, corMarca, corApoio, corSeta){
+  const t=tam||30;
+  return `<g transform="translate(${x},${y})" style="pointer-events:none">`
+    + logoGrupoSVG(0, 0, t, corMarca||corTxt, corApoio, corSeta)
+    + `<text x="${t+9}" y="${t*0.46}" font-size="${(t*0.52).toFixed(1)}" font-weight="800" `
+    + `fill="${corTxt}" font-family="'Inter','Segoe UI',sans-serif" letter-spacing=".2">C-Floxer</text>`
+    + `<text x="${t+9}" y="${t*0.86}" font-size="${(t*0.30).toFixed(1)}" font-weight="600" `
+    + `fill="${corTxt}" opacity=".72" font-family="'Inter','Segoe UI',sans-serif" letter-spacing=".6">FLOW BUILDER</text>`
+    + `</g>`;
+}
+function logoSVGAutonomo(largura, corTxt, corMarca){
+  const t=104, m=28;
+  const larguraNome = 8 * (t*0.52) * 0.64;                      /* “C-Floxer” */
+  const larguraDesc = 12 * (t*0.30) * 0.76 + 12 * 0.6;          /* “FLOW BUILDER” */
+  const W=Math.round(t + 9 + Math.max(larguraNome, larguraDesc) + m*2);
+  const H=Math.round(t + 44);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`
+    + `<rect width="${W}" height="${H}" fill="none"/>`
+    + logoAssinaturaSVG(m, (H-t)/2, t, corTxt||'#233029', corMarca||'#3D5142', '#6B8A72', '#C08A3E')
+    + `</svg>`;
+}
+/* a marca no topo passa a usar a variante compacta */
+function aplicarLogoTopo(){
+  const el=document.querySelector('.brand .logo');
+  if(!el) return;
+  el.innerHTML=`<svg width="25" height="25" viewBox="0 0 64 64">${logoMiniSVG('#fff','#CBDACF','#FFE7BE')}</svg>`;
+  el.style.padding='0';
+  el.setAttribute('title','C-Floxer — clique para ampliar, copiar ou baixar a marca');
+}
+/* marca ampliada, no modal */
+function marcaGrandeSVG(variante){
+  const v=variante||mkVariante;
+  const conf={
+    claro:  {marca:'#3D5142', apoio:'#6B8A72', seta:'#C08A3E', txt:'#233029'},
+    escuro: {marca:'#FFFFFF', apoio:'#CBDACF', seta:'#E0B978', txt:'#FFFFFF'},
+    mono:   {marca:'#233029', apoio:'#233029', seta:'#233029', txt:'#233029'},
+    branca: {marca:'#FFFFFF', apoio:'#FFFFFF', seta:'#FFFFFF', txt:'#FFFFFF'}
+  }[v] || {marca:'#3D5142', apoio:'#6B8A72', seta:'#C08A3E', txt:'#233029'};
+  const t=104, m=28;
+  const larguraNome = 8 * (t*0.52) * 0.64;
+  const larguraDesc = 12 * (t*0.30) * 0.76 + 12 * 0.6;
+  const W=Math.round(t + 9 + Math.max(larguraNome, larguraDesc) + m*2);
+  const H=Math.round(t + 44);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`
+    + `<rect width="${W}" height="${H}" fill="none"/>`
+    + logoAssinaturaSVG(m, (H-t)/2, t, conf.txt, conf.marca, conf.apoio, conf.seta)
+    + `</svg>`;
+}
+
+/* =========================================================================
+   2) ABERTURA — o carregamento constrói um fluxo diante do usuário
+   Em vez de uma barra, os elementos aparecem em sequência e são conectados,
+   como se o sistema estivesse desenhando o primeiro processo.
+   ========================================================================= */
+(function(){
+  const css=`
+  /* ---------- abertura: construção de fluxo ---------- */
+  .sp-fluxo{width:340px;height:96px;margin-top:6px}
+  .sp-fluxo .no{opacity:0;transform-origin:center;
+    animation:spNo .42s cubic-bezier(.2,.9,.3,1.2) forwards}
+  .sp-fluxo .lig{stroke-dasharray:44;stroke-dashoffset:44;
+    animation:spLig .34s ease forwards}
+  .sp-fluxo .rot{opacity:0;animation:spRot .3s ease forwards}
+  @keyframes spNo {from{opacity:0;transform:scale(.4)} to{opacity:1;transform:scale(1)}}
+  @keyframes spLig{to{stroke-dashoffset:0}}
+  @keyframes spRot{to{opacity:.82}}
+  .sp-passo{font-size:11px;font-weight:700;color:rgba(255,255,255,.72);letter-spacing:.4px;
+    min-height:16px;margin-top:2px}
+  #splash{transition:opacity .5s ease, visibility .5s}
+  `;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* o desenho que a abertura constrói, passo a passo */
+function fluxoDeAberturaSVG(cor, corApoio, corSeta){
+  const c=cor||'#FFFFFF', c2=corApoio||'rgba(255,255,255,.34)', c3=corSeta||'#E0B978';
+  const Y=46;
+  const passo=(i)=>(i*0.26+0.15).toFixed(2)+'s';   /* cada elemento entra em sequência */
+  let s=`<svg class="sp-fluxo" viewBox="0 0 340 96" xmlns="http://www.w3.org/2000/svg">`;
+  /* ligações, desenhadas antes dos nós para ficarem por baixo */
+  [[38,86],[110,158],[182,230],[254,296]].forEach(([x1,x2],i)=>{
+    s+=`<path class="lig" d="M${x1} ${Y}h${x2-x1}" fill="none" stroke="${c2}" stroke-width="2.4"
+         stroke-linecap="round" style="animation-delay:${passo(i)+''}"/>`;
+  });
+  /* início */
+  s+=`<circle class="no" cx="24" cy="${Y}" r="13" fill="none" stroke="${c}" stroke-width="3"
+       style="animation-delay:0s"/>`;
+  /* duas atividades */
+  [98,170].forEach((x,i)=>{
+    s+=`<rect class="no" x="${x-26}" y="${Y-19}" width="52" height="38" rx="8" fill="none"
+         stroke="${c}" stroke-width="2.6" style="animation-delay:${passo(i*2)}"/>`;
+    s+=`<path class="no" d="M${x-14} ${Y-6}h28M${x-14} ${Y+1}h20" stroke="${c}" stroke-width="2"
+         stroke-linecap="round" opacity=".55" style="animation-delay:${passo(i*2)}"/>`;
+  });
+  /* decisão */
+  s+=`<polygon class="no" points="242,${Y-19} 261,${Y} 242,${Y+19} 223,${Y}" fill="none"
+       stroke="${c3}" stroke-width="2.8" style="animation-delay:${passo(4)}"/>`;
+  /* fim */
+  s+=`<circle class="no" cx="310" cy="${Y}" r="13" fill="none" stroke="${c}" stroke-width="4"
+       style="animation-delay:${passo(5)}"/>`;
+  s+=`<circle class="no" cx="310" cy="${Y}" r="6" fill="${c}" style="animation-delay:${passo(5)}"/>`;
+  s+=`</svg>`;
+  return s;
+}
+/* os passos narrados ao lado da construção */
+const PASSOS_ABERTURA = [
+  'Preparando a área de desenho…',
+  'Carregando as formas…',
+  'Conectando o fluxo…',
+  'Pronto para construir'
+];
+
+function mostrarSplash(){
+  if(document.getElementById && document.getElementById('splash')) return;
+  const d=document.createElement('div');
+  d.id='splash';
+  d.innerHTML=`<div class="sp-cx">
+      <div class="sp-marca"><svg width="104" height="104" viewBox="0 0 64 64">
+        ${logoMarcaSVG('#FFFFFF','#CBDACF','#E0B978')}</svg></div>
+      <div style="text-align:center">
+        <div class="sp-nome">C-Floxer</div>
+        <div class="sp-sub">Flow Builder</div>
+      </div>
+      ${fluxoDeAberturaSVG('#FFFFFF','rgba(255,255,255,.34)','#E0B978')}
+      <div class="sp-passo" id="spPasso">${PASSOS_ABERTURA[0]}</div>
+    </div>`;
+  if(document.body && document.body.appendChild) document.body.appendChild(d);
+
+  /* a narração acompanha a construção */
+  let i=0;
+  const trocar=setInterval(()=>{
+    i++;
+    const el=$('#spPasso');
+    if(el && PASSOS_ABERTURA[i]) el.textContent=PASSOS_ABERTURA[i];
+    if(i>=PASSOS_ABERTURA.length-1) clearInterval(trocar);
+  }, 460);
+
+  let fechado=false;
+  const fechar=()=>{
+    if(fechado) return; fechado=true;
+    clearInterval(trocar);
+    if(d.classList) d.classList.add('sumindo');
+    setTimeout(()=>{ if(d.remove) d.remove(); }, 560);
+  };
+  d.onclick=fechar;                       /* clicar pula a abertura */
+  setTimeout(fechar, 2100);               /* tempo suficiente para o fluxo se formar */
+  return d;
+}
+
+/* =========================================================================
+   3) A MARCA NAS EXPORTAÇÕES — mesma assinatura, nome novo
+   ========================================================================= */
+function exportHTML(){
+  if(!temDiagrama()) return;
+  const svg=buildStandaloneSVG(model,{pad:40});
+  const m=model.meta;
+  const marca=`<svg width="46" height="46" viewBox="0 0 64 64" style="flex:0 0 46px">${logoMarcaSVG('#fff','#CBDACF','#E0B978')}</svg>`;
+  const html=`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>C-Floxer · ${esc(m.nome)}</title>
+<style>body{font-family:'Inter','Segoe UI',sans-serif;margin:0;background:#F4F8F5;color:#233029}
+header{background:linear-gradient(100deg,#233029,#33453A 50%,#4A6152 115%);color:#fff;padding:16px 26px;
+  display:flex;align-items:center;gap:14px}
+header h1{margin:0;font-size:17px} header span{font-size:11.5px;opacity:.8}
+header .mk b{display:block;font-size:12px;letter-spacing:.3px}
+header .mk i{font-style:normal;font-size:9px;opacity:.7;letter-spacing:.6px}
+main{padding:22px 26px;max-width:1400px;margin:0 auto}
+.box{background:#fff;border:1px solid #E3EBE6;border-radius:12px;padding:16px;margin-bottom:16px;overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:12px}th{background:#EEF4F0;text-align:left;padding:6px 8px;border:1px solid #CBDACF;font-size:10px;text-transform:uppercase}
+td{border:1px solid #E3EBE6;padding:6px 8px;vertical-align:top}svg{max-width:100%;height:auto}
+.kpi{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}.kpi div{background:#fff;border:1px solid #E3EBE6;border-radius:10px;padding:10px 16px}
+.kpi b{display:block;font-size:22px;color:#3D5142}.kpi span{font-size:10px;text-transform:uppercase;color:#4F6355;font-weight:700}
+footer{padding:14px 26px;color:#94A89A;font-size:11px;display:flex;align-items:center;gap:9px}
+footer svg{flex:0 0 22px}</style></head><body>
+<header>${marca}<div style="flex:1"><h1>${esc(m.nome)}</h1>
+<span>${esc(m.area||'')} · ${esc(m.tipo||'')} · versão ${esc(m.versao||'')} · ${esc(m.data||'')}</span></div>
+<div class="mk" style="text-align:right"><b>C-Floxer</b><i>FLOW BUILDER</i></div></header>
+<main><div class="kpi">${kpisHTML()}</div><div class="box">${svg}</div>
+<div class="box">${tabelaAtividadesHTML()}</div><div class="box">${narrativaHTML()}</div></main>
+<footer><svg width="22" height="22" viewBox="0 0 64 64">${logoMiniSVG('#4F6355','#8FA896','#C08A3E')}</svg>
+Gerado pelo C-Floxer — Flow Builder</footer></body></html>`;
+  baixar(nomeArq('html'),html,'text/html;charset=utf-8'); toast('HTML exportado com a marca do sistema','ok');
+}
+
+function docParaArquivo(){
+  if(!$('#docBody')) gerarDoc();
+  const b=$('#docBody'); if(!b) return null;
+  const marcaImg = LOGO_PNG
+    ? `<img src="${LOGO_PNG}" alt="C-Floxer" style="height:34px">`
+    : `<span style="font-size:16px;font-weight:800;color:#3D5142">C-Floxer</span>`;
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(model.meta.nome)}</title>
+  <style>body{font-family:'Inter','Segoe UI',sans-serif;color:#233029;margin:26px;line-height:1.6}
+  h1{font-size:21px;margin:0 0 4px}h2{font-size:15px;color:#3D5142;border-bottom:2px solid #3D5142;padding-bottom:4px;margin:22px 0 8px}
+  h3{font-size:13px;margin:14px 0 5px}table{border-collapse:collapse;width:100%;font-size:11.5px;margin:8px 0}
+  th{background:#EEF4F0;border:1px solid #CBDACF;padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase}
+  td{border:1px solid #E3EBE6;padding:6px 8px;vertical-align:top}.metaline{color:#4F6355;font-size:11.5px}
+  .kpi{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}.kpi div{border:1px solid #E3EBE6;background:#F2F7F3;border-radius:8px;padding:8px 12px}
+  .kpi b{display:block;font-size:19px;color:#3D5142}.kpi span{font-size:9.5px;text-transform:uppercase;color:#4F6355;font-weight:700}
+  .tag{background:#E7EFE9;color:#3D5142;border-radius:4px;padding:1px 5px;font-size:9.5px;font-weight:800;margin-right:3px}
+  svg{max-width:100%;height:auto}li{margin-bottom:4px;font-size:12px}
+  .cf-cab{border-bottom:2px solid #3D5142;padding-bottom:10px;margin-bottom:16px}
+  .cf-rod{border-top:1px solid #CBDACF;margin-top:26px;padding-top:10px;color:#94A89A;font-size:10.5px}
+  </style></head><body>
+  <div class="cf-cab">${marcaImg}</div>
+  ${b.innerHTML}
+  <div class="cf-rod">Documento gerado pelo <b>C-Floxer — Flow Builder</b> · ${esc(model.meta.nome||'')} · ${esc(model.meta.data||'')}</div>
+  </body></html>`;
+}
+
+/* =========================================================================
+   4) ARRANQUE
+   ========================================================================= */
+(function(){
+  function arrancar(){
+    try{ aplicarLogoTopo(); }catch(e){}
+    try{ if(typeof gerarLogoPNG==='function') gerarLogoPNG(); }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,150));
+  else setTimeout(arrancar,150);
+})();
+
+</script>
 </body></html>
