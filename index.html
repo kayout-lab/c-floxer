@@ -994,6 +994,12 @@ table.grid select{font-size:11px}
 .sess-cod-grande{font-family:Consolas,monospace;font-size:30px;font-weight:800;letter-spacing:6px;
   color:var(--acao);margin:6px 0 0}
 #btnSessao.on{background:rgba(47,133,90,.3);border-color:rgba(47,133,90,.55)}
+
+.sess-proprio{background:var(--musgo-0);border:1px solid var(--line);border-radius:10px;
+  padding:11px 13px;margin-top:11px}
+.sess-proprio-t{font-size:11px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;
+  color:var(--acao);margin-bottom:5px}
+.sess-proprio p{margin:0 0 9px;font-size:11.5px;color:var(--txt2);line-height:1.55}
 </style>
 </head>
 <body>
@@ -13989,9 +13995,13 @@ function docParaArquivo(){
    ========================================================================= */
 
 /* servidores públicos, tentados em ordem até um responder */
+/* Servidores de apresentação. O primeiro da lista é o seu, se você
+   implantou o seu próprio — é o único sobre o qual você tem controle.
+   Os demais são públicos e mantidos pela comunidade: podem sair do ar
+   sem aviso, e por isso não convém depender só deles. */
 const SERVIDORES_PADRAO = [
-  'wss://y-webrtc-eu.fly.dev',
   'wss://signaling.yjs.dev',
+  'wss://y-webrtc-eu.fly.dev',
   'wss://y-webrtc-signaling-eu.herokuapp.com'
 ];
 const PREFIXO_SALA = 'cfloxer-';       /* evita colidir com outras aplicações no mesmo servidor */
@@ -14408,10 +14418,18 @@ function modalSessao(){
            participante ao outro — o desenho nunca passa por ele.
          </div>
          <div class="field"><label>Servidor de apresentação</label>
-           <input id="sessServidor" value="${esc(cfg.servidor||SERVIDORES_PADRAO[0])}">
+           <input id="sessServidor" value="${esc(cfg.servidor||'')}" placeholder="${esc(SERVIDORES_PADRAO[0])}">
            <div class="fieldhint" style="text-align:left">
-             Se não responder, o sistema tenta os outros da lista automaticamente.
+             Em branco, usa os servidores públicos. Se nenhum responder, o caminho
+             confiável é ter o seu — veja abaixo.
            </div>
+         </div>
+         <div class="sess-proprio">
+           <div class="sess-proprio-t">Servidor próprio, gratuito</div>
+           <p>Os servidores públicos são mantidos pela comunidade e podem sair do ar
+             sem aviso. Ter o seu leva cerca de cinco minutos e não custa nada:
+             o plano gratuito da Cloudflare cobre 100 mil conexões por dia.</p>
+           <button class="btn sm" id="sessBaixarSrv">⤓ Baixar o servidor pronto</button>
          </div>
          <label class="dd-check" style="padding-left:0">
            <input type="checkbox" id="sessManual" ${cfg.modo==='manual'?'checked':''}>
@@ -14471,6 +14489,8 @@ function modalSessao(){
   };
   const bco=$('#sessCodigoOk');
   if(bco) bco.onclick=()=>lerCodigoManual(($('#sessCodigoIn')||{value:''}).value);
+  const bsrv=$('#sessBaixarSrv');
+  if(bsrv) bsrv.onclick=baixarServidorProprio;
   if(typeof autoGrow==='function'){ autoGrow('#sessCodigo'); autoGrow('#sessCodigoIn'); }
 }
 
@@ -14804,6 +14824,262 @@ function initSessaoV26(){
   function arrancar(){ try{ initSessaoV26(); }catch(e){} }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,300));
   else setTimeout(arrancar,300);
+})();
+
+</script>
+<script>
+
+/* =========================================================================
+   Entrega o servidor de apresentação pronto para implantar
+   ========================================================================= */
+const SRV_WORKER = `/* =========================================================================
+   Servidor de apresentação do C-Floxer
+   
+   O que ele faz: apresenta um participante ao outro. Só isso.
+   O desenho NUNCA passa por aqui — depois da apresentação, os navegadores
+   conversam diretamente entre si.
+   
+   Onde roda: Cloudflare Workers, no plano gratuito.
+   Custo: zero. O plano gratuito cobre 100 mil conexões por dia, e as
+   mensagens trocadas depois de conectado não são cobradas.
+   ========================================================================= */
+
+/* Cada sala é um objeto isolado, com seus próprios participantes.
+   É isso que garante que duas pessoas com o mesmo código se encontrem,
+   mesmo estando em continentes diferentes. */
+export class Sala {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.assinantes = new Map();   /* conexão -> conjunto de tópicos */
+  }
+
+  async fetch(request) {
+    const par = new WebSocketPair();
+    const [cliente, servidor] = Object.values(par);
+    this.aceitar(servidor);
+    return new Response(null, { status: 101, webSocket: cliente });
+  }
+
+  aceitar(ws) {
+    ws.accept();
+    this.assinantes.set(ws, new Set());
+
+    ws.addEventListener('message', ev => {
+      let m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (!m || !m.type) return;
+
+      /* --- assinar um ou mais tópicos --- */
+      if (m.type === 'subscribe') {
+        const meus = this.assinantes.get(ws);
+        (m.topics || []).forEach(t => { if (typeof t === 'string') meus.add(t); });
+        return;
+      }
+
+      /* --- deixar de assinar --- */
+      if (m.type === 'unsubscribe') {
+        const meus = this.assinantes.get(ws);
+        (m.topics || []).forEach(t => meus.delete(t));
+        return;
+      }
+
+      /* --- publicar: repassa a quem estiver assinando o mesmo tópico --- */
+      if (m.type === 'publish') {
+        if (!m.topic) return;
+        const texto = JSON.stringify(m);
+        let entregues = 0;
+        for (const [outro, topicos] of this.assinantes) {
+          if (outro === ws) continue;              /* não devolve ao remetente */
+          if (!topicos.has(m.topic)) continue;
+          try { outro.send(texto); entregues++; } catch (e) { /* conexão morta */ }
+        }
+        return;
+      }
+
+      /* --- manter viva --- */
+      if (m.type === 'ping') {
+        try { ws.send(JSON.stringify({ type: 'pong' })); } catch (e) {}
+        return;
+      }
+    });
+
+    const encerrar = () => this.assinantes.delete(ws);
+    ws.addEventListener('close', encerrar);
+    ws.addEventListener('error', encerrar);
+  }
+}
+
+/* Ponto de entrada: encaminha cada conexão para a sala certa */
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    /* página simples, para conferir que o servidor está no ar */
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response(
+        'Servidor de apresentação do C-Floxer está no ar.\\n\\n' +
+        'Use este endereço no campo "Servidor de apresentação", dentro de\\n' +
+        'Sessão compartilhada > Conexão e rede:\\n\\n' +
+        '  wss://' + url.host + '\\n\\n' +
+        'O desenho nao passa por aqui: o servidor apenas apresenta um\\n' +
+        'participante ao outro. Depois disso, os navegadores conversam\\n' +
+        'diretamente entre si.\\n',
+        { headers: { 'content-type': 'text/plain; charset=utf-8' } }
+      );
+    }
+
+    /* Todos entram no mesmo objeto de coordenação. Simples e suficiente
+       para o uso pretendido: salas pequenas, poucos participantes. */
+    const id = env.SALA.idFromName('cfloxer-global');
+    return env.SALA.get(id).fetch(request);
+  }
+};
+`;
+const SRV_WRANGLER = `name = "cfloxer-sinal"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[[durable_objects.bindings]]
+name = "SALA"
+class_name = "Sala"
+
+# O plano gratuito exige o armazenamento SQLite
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Sala"]
+`;
+const SRV_LEIAME = `SERVIDOR DE APRESENTACAO DO C-FLOXER
+=====================================
+
+Para que serve
+--------------
+Ele apresenta um participante ao outro quando voce abre uma sessao
+compartilhada. So isso. O desenho NUNCA passa por ele: depois da
+apresentacao, os navegadores conversam diretamente entre si.
+
+Por que ter o seu
+-----------------
+O C-Floxer ja vem apontando para servidores publicos, mantidos pela
+comunidade. Eles funcionam, mas podem sair do ar sem aviso. Tendo o seu,
+a sessao compartilhada deixa de depender de terceiros.
+
+Custo: zero. O plano gratuito da Cloudflare cobre 100 mil conexoes por
+dia, e as mensagens trocadas depois de conectado nao sao cobradas.
+
+
+COMO IMPLANTAR (cerca de 5 minutos)
+===================================
+
+1. Crie uma conta gratuita em https://dash.cloudflare.com/sign-up
+   Nao pede cartao.
+
+2. Instale as ferramentas (precisa do Node.js na maquina):
+
+   npm install -g wrangler
+
+3. Entre na sua conta:
+
+   wrangler login
+
+   Abre o navegador para autorizar. Confirme e volte ao terminal.
+
+4. Dentro desta pasta, publique:
+
+   wrangler deploy
+
+   Ao final, o terminal mostra o endereco, algo como:
+
+   https://cfloxer-sinal.SEU-USUARIO.workers.dev
+
+5. Troque https:// por wss:// e cole no C-Floxer, em:
+
+   Sessao compartilhada > Conexao e rede > Servidor de apresentacao
+
+   Ficara assim:
+
+   wss://cfloxer-sinal.SEU-USUARIO.workers.dev
+
+6. Clique em "Salvar preferencias" e depois em "Testar conexao".
+   O seu servidor deve aparecer em verde.
+
+
+CONFERINDO SE ESTA NO AR
+========================
+Abra o endereco https:// no navegador. Se aparecer uma mensagem de
+texto confirmando que o servidor esta no ar, deu certo.
+
+
+PARA A EQUIPE INTEIRA
+=====================
+Cada pessoa precisa apontar para o mesmo servidor. Duas formas:
+
+  a) Cada um cola o endereco uma vez, no painel de conexao. Fica salvo
+     no navegador.
+
+  b) Melhor: edite o arquivo do C-Floxer e coloque o seu endereco como
+     primeiro da lista. Procure por SERVIDORES_PADRAO e deixe assim:
+
+     const SERVIDORES_PADRAO = [
+       'wss://cfloxer-sinal.SEU-USUARIO.workers.dev',
+       'wss://signaling.yjs.dev'
+     ];
+
+     Assim todos usam o seu servidor sem precisar configurar nada.
+
+
+SE A REDE DA EMPRESA BLOQUEAR
+=============================
+Algumas redes corporativas bloqueiam conexoes persistentes. Nesse caso,
+use o modo manual, que ja vem no C-Floxer: em Conexao e rede, marque
+"modo manual". Voces trocam um codigo de texto por e-mail ou chat, e a
+sessao funciona sem servidor algum.
+
+
+PRIVACIDADE
+===========
+O servidor nao guarda nada. Nao ha banco de dados, nao ha registro.
+Ele apenas repassa mensagens de apresentacao entre quem esta na mesma
+sala, e esquece tudo quando a conexao fecha. O desenho em si nunca
+chega a ele.
+`;
+
+function baixarServidorProprio(){
+  baixar('cfloxer-sinal_worker.js', SRV_WORKER, 'text/javascript;charset=utf-8');
+  setTimeout(()=>baixar('cfloxer-sinal_wrangler.toml', SRV_WRANGLER, 'text/plain;charset=utf-8'), 300);
+  setTimeout(()=>baixar('cfloxer-sinal_LEIAME.txt', SRV_LEIAME, 'text/plain;charset=utf-8'), 600);
+  toast('Três arquivos baixados — siga o LEIAME.txt','ok');
+  setTimeout(()=>{
+    abrirModal('⤓ Servidor próprio, em cinco minutos',
+      `<p style="margin-top:0;font-size:12.8px">Baixei três arquivos. O passo a passo completo está
+        no <b>LEIAME.txt</b>, mas o essencial é isto:</p>
+       <div class="srv-passos">
+         <div class="srv-p"><b>1</b><div>Crie uma conta gratuita na Cloudflare — não pede cartão.</div></div>
+         <div class="srv-p"><b>2</b><div>Ponha os três arquivos numa pasta e abra o terminal nela.</div></div>
+         <div class="srv-p"><b>3</b><div><code>npm install -g wrangler</code></div></div>
+         <div class="srv-p"><b>4</b><div><code>wrangler login</code></div></div>
+         <div class="srv-p"><b>5</b><div><code>wrangler deploy</code></div></div>
+         <div class="srv-p"><b>6</b><div>Copie o endereço que aparecer, troque <code>https://</code> por
+           <code>wss://</code> e cole no campo <b>Servidor de apresentação</b>.</div></div>
+       </div>
+       <div class="dica-inline" style="margin-top:12px">
+         O plano gratuito cobre <b>100 mil conexões por dia</b>. Para o uso de uma equipe,
+         é folgado. E o servidor não guarda nada: só apresenta um participante ao outro.
+       </div>`,
+      `<button class="btn primary" onclick="fecharModal()">Entendi</button>`);
+  }, 900);
+}
+(function(){
+  const css=`
+  .srv-passos{display:flex;flex-direction:column;gap:7px;margin-top:10px}
+  .srv-p{display:flex;gap:10px;align-items:flex-start}
+  .srv-p b{flex:0 0 22px;height:22px;border-radius:6px;background:var(--acao);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:11px;margin-top:1px}
+  .srv-p div{flex:1;font-size:12.3px;color:var(--txt2);line-height:1.5;padding-top:2px}
+  .srv-p code{background:var(--musgo-1);border-radius:4px;padding:1px 6px;
+    font-family:Consolas,monospace;font-size:11.5px;color:var(--musgo-8)}
+  `;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
 })();
 
 </script>
