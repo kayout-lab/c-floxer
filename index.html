@@ -12754,6 +12754,12 @@ function estadoParaRede(){
   };
 }
 function aplicarEstadoDaRede(e, versoes){
+  /* Rede de segurança: nunca substituir um desenho com conteúdo por um vazio.
+     Sem isto, quem entrasse numa sala apagaria o trabalho de quem já estava. */
+  const chegando=(e && ((e.nodes||[]).length + (e.pools||[]).length)) || 0;
+  const tenho=model.nodes.length + model.pools.length;
+  if(chegando===0 && tenho>0) return;
+  ss.recebeuEstado=true;
   ss.ecoando=true;
   try{
     model.nodes = (e.nodes||[]).map(n=>reidratar(n, null));
@@ -12800,8 +12806,14 @@ function receber(m, deQuem){
   const par=ss.pares[deQuem];
   switch(m.t){
     case 'ola':
-      if(par){ par.nome=m.nome||'Participante'; par.cor=m.cor||par.cor; }
+      if(par){ par.nome=m.nome||'Participante'; par.cor=m.cor||par.cor; par.tem=m.tem||0; }
       atualizarPainelSessao(); render();
+      break;
+    case 'pedeEstado':
+      /* só responde quem tem algo a oferecer */
+      if(model.nodes.length || model.pools.length){
+        enviarPara(deQuem, {t:'estado', modelo:enxugarParaRede(estadoParaRede()), versoes:ss.versoes});
+      }
       break;
     case 'estado':
       aplicarEstadoDaRede(m.modelo, m.versoes);
@@ -13958,6 +13970,840 @@ function docParaArquivo(){
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,150));
   else setTimeout(arrancar,150);
+})();
+
+</script>
+<script>
+/* =========================================================================
+   C-Floxer v26 — SESSÃO CORRIGIDA + IDENTIDADE VISUAL
+   
+   Correção do defeito relatado: o código falava um protocolo inventado com
+   um servidor que fala outro. As mensagens eram descartadas em silêncio e
+   os participantes nunca se encontravam.
+   ========================================================================= */
+
+/* =========================================================================
+   1) SINALIZAÇÃO NO PROTOCOLO CORRETO
+   O servidor é um repassador por tópico: assina-se um tópico e publica-se
+   nele. Ele não lê o conteúdo — apenas reenvia a quem estiver assinando.
+   ========================================================================= */
+
+/* servidores públicos, tentados em ordem até um responder */
+const SERVIDORES_PADRAO = [
+  'wss://y-webrtc-eu.fly.dev',
+  'wss://signaling.yjs.dev',
+  'wss://y-webrtc-signaling-eu.herokuapp.com'
+];
+const PREFIXO_SALA = 'cfloxer-';       /* evita colidir com outras aplicações no mesmo servidor */
+const RECONECTA_MS = 2600;
+const ANUNCIO_MS   = 4000;             /* reanuncia para achar quem chegou depois */
+const PING_MS      = 25000;
+
+let sinal = {
+  ws:null, url:'', indice:0, tentativas:0,
+  timerAnuncio:null, timerPing:null, timerReconecta:null,
+  conectado:false, assinado:false
+};
+
+function topicoDaSala(){ return PREFIXO_SALA + String(ss.sala||'').toLowerCase(); }
+
+/* envia uma mensagem ao servidor, no formato que ele entende */
+function enviarAoServidor(obj){
+  if(!sinal.ws || sinal.ws.readyState!==1) return false;
+  try{ sinal.ws.send(JSON.stringify(obj)); return true; }catch(e){ return false; }
+}
+/* publica no tópico da sala — todos os outros participantes recebem */
+function publicar(dados){
+  return enviarAoServidor({ type:'publish', topic: topicoDaSala(), ...dados });
+}
+/* mantida por compatibilidade: o resto do sistema chama sinalizar() */
+function sinalizar(msg){
+  if(ss.modoManual){ acumularManual(msg); return; }
+  publicar(msg);
+}
+
+function abrirSinalizacao(url, aoPronto, aoErro){
+  fecharSinalizacao();
+  sinal.url = url;
+  try{
+    const ws = new WebSocket(url);
+    sinal.ws = ws;
+    ws.onopen = ()=>{
+      sinal.conectado=true; sinal.tentativas=0;
+      /* 1) assina o tópico da sala */
+      enviarAoServidor({ type:'subscribe', topics:[ topicoDaSala() ] });
+      sinal.assinado=true;
+      /* 2) anuncia a própria presença — é assim que os outros nos descobrem */
+      anunciarPresenca();
+      /* 3) reanuncia periodicamente, para encontrar quem entrar depois */
+      if(sinal.timerAnuncio) clearInterval(sinal.timerAnuncio);
+      sinal.timerAnuncio=setInterval(anunciarPresenca, ANUNCIO_MS);
+      /* 4) mantém a conexão viva */
+      if(sinal.timerPing) clearInterval(sinal.timerPing);
+      sinal.timerPing=setInterval(()=>enviarAoServidor({type:'ping'}), PING_MS);
+      atualizarPainelSessao();
+      if(aoPronto) aoPronto();
+    };
+    ws.onmessage = ev=>{
+      let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+      if(!m) return;
+      if(m.type==='ping'){ enviarAoServidor({type:'pong'}); return; }
+      if(m.type==='pong') return;
+      /* o servidor devolve o que foi publicado, no mesmo envelope */
+      if(m.type==='publish' && m.topic===topicoDaSala()){
+        tratarSinal(m);
+      }
+    };
+    ws.onerror = ()=>{ sinal.conectado=false; };
+    ws.onclose = ()=>{
+      sinal.conectado=false; sinal.assinado=false; sinal.ws=null;
+      if(sinal.timerAnuncio){ clearInterval(sinal.timerAnuncio); sinal.timerAnuncio=null; }
+      if(sinal.timerPing){ clearInterval(sinal.timerPing); sinal.timerPing=null; }
+      if(ss.ativa && !ss.modoManual) agendarReconexao(aoErro);
+    };
+    return ws;
+  }catch(e){
+    sinal.conectado=false;
+    agendarReconexao(aoErro);
+    return null;
+  }
+}
+/* tenta o próximo servidor da lista; se todos falharem, avisa e sugere o modo manual */
+function agendarReconexao(aoErro){
+  if(sinal.timerReconecta) return;
+  sinal.tentativas++;
+  const lista=listaDeServidores();
+  if(sinal.tentativas > lista.length*2){
+    sinal.tentativas=0;
+    if(aoErro) aoErro();
+    toast('Nenhum servidor de conexão respondeu — experimente o modo manual','err');
+    atualizarPainelSessao();
+    return;
+  }
+  sinal.indice=(sinal.indice+1) % lista.length;
+  const proximo=lista[sinal.indice];
+  toast('Reconectando…');
+  sinal.timerReconecta=setTimeout(()=>{
+    sinal.timerReconecta=null;
+    if(ss.ativa) abrirSinalizacao(proximo, null, aoErro);
+  }, RECONECTA_MS);
+}
+function listaDeServidores(){
+  const cfg=lerConfigSessao();
+  const proprio=(cfg.servidor||'').trim();
+  if(proprio && !SERVIDORES_PADRAO.includes(proprio)) return [proprio, ...SERVIDORES_PADRAO];
+  return SERVIDORES_PADRAO.slice();
+}
+function fecharSinalizacao(){
+  if(sinal.timerAnuncio){ clearInterval(sinal.timerAnuncio); sinal.timerAnuncio=null; }
+  if(sinal.timerPing){ clearInterval(sinal.timerPing); sinal.timerPing=null; }
+  if(sinal.timerReconecta){ clearTimeout(sinal.timerReconecta); sinal.timerReconecta=null; }
+  if(sinal.ws){ try{ sinal.ws.close(); }catch(e){} }
+  sinal.ws=null; sinal.conectado=false; sinal.assinado=false;
+}
+/* diz aos demais que estamos aqui */
+function anunciarPresenca(){
+  if(!ss.ativa || !ss.eu) return;
+  if(totalNaSala()>=SESSAO_MAX) return;      /* sala cheia: não há quem procurar */
+  publicar({ t:'anuncio', de:ss.eu.id, nome:ss.eu.nome, sala:ss.sala });
+}
+
+/* =========================================================================
+   2) DESCOBERTA E APERTO DE MÃO
+   Quem tem o identificador maior faz a oferta. Isso evita que os dois lados
+   ofereçam ao mesmo tempo e a conexão nunca se estabeleça.
+   ========================================================================= */
+function euInicio(outroId){ return String(ss.eu.id) > String(outroId); }
+
+async function tratarSinal(m){
+  if(!m || !ss.ativa || !ss.eu) return;
+  if(m.de===ss.eu.id) return;                       /* eco da própria mensagem */
+  if(m.sala && m.sala!==ss.sala) return;
+  if(m.para && m.para!==ss.eu.id) return;
+
+  try{
+    if(m.t==='anuncio'){
+      if(ss.pares[m.de]) {                          /* já conhecido: só atualiza o nome */
+        if(m.nome) ss.pares[m.de].nome=m.nome;
+        atualizarPainelSessao();
+        return;
+      }
+      if(totalNaSala()>=SESSAO_MAX){
+        publicar({ t:'cheia', para:m.de, de:ss.eu.id, sala:ss.sala });
+        return;
+      }
+      /* Responde ao anúncio para que o outro também nos conheça — mas apenas
+         quando o anúncio for espontâneo. Sem isto, cada lado responderia ao
+         outro indefinidamente, num vaivém que nunca termina. */
+      if(!m.resposta){
+        publicar({ t:'anuncio', resposta:true, para:m.de, de:ss.eu.id, nome:ss.eu.nome, sala:ss.sala });
+      }
+      if(euInicio(m.de) && !ss.pares[m.de]){
+        const par=criarConexao(m.de, true);
+        if(m.nome) par.nome=m.nome;
+        const oferta=await par.pc.createOffer();
+        await par.pc.setLocalDescription(oferta);
+        publicar({ t:'oferta', para:m.de, de:ss.eu.id, sala:ss.sala, sdp:par.pc.localDescription });
+      }
+      atualizarPainelSessao();
+    }
+    else if(m.t==='oferta'){
+      if(totalNaSala()>=SESSAO_MAX) return;
+      let par=ss.pares[m.de];
+      if(par && par.pc.remoteDescription && par.pc.remoteDescription.type) return;  /* já tratada */
+      if(!par) par=criarConexao(m.de, false);
+      if(par.pc.signalingState!=='stable' && euInicio(m.de)) return;   /* colisão: o outro cede */
+      await par.pc.setRemoteDescription(m.sdp);
+      const resp=await par.pc.createAnswer();
+      await par.pc.setLocalDescription(resp);
+      publicar({ t:'resposta', para:m.de, de:ss.eu.id, sala:ss.sala, sdp:par.pc.localDescription });
+      /* candidatos que chegaram antes da descrição remota */
+      escoarCandidatos(m.de);
+    }
+    else if(m.t==='resposta'){
+      const par=ss.pares[m.de];
+      if(!par) return;
+      if(par.pc.signalingState==='have-local-offer'){
+        await par.pc.setRemoteDescription(m.sdp);
+        escoarCandidatos(m.de);
+      }
+    }
+    else if(m.t==='ice'){
+      const par=ss.pares[m.de];
+      if(!par){ guardarCandidato(m.de, m.c); return; }
+      if(!par.pc.remoteDescription || !par.pc.remoteDescription.type){
+        guardarCandidato(m.de, m.c); return;         /* cedo demais: guarda para depois */
+      }
+      try{ await par.pc.addIceCandidate(m.c); }catch(e){}
+    }
+    else if(m.t==='saiu'){
+      removerPar(m.de);
+    }
+    else if(m.t==='cheia'){
+      toast('A sala está cheia — limite de '+SESSAO_MAX+' participantes','err');
+      sairSessao(true);
+    }
+  }catch(e){ /* uma falha de aperto de mão não derruba a sessão */ }
+}
+/* candidatos que chegam antes da hora ficam guardados */
+let _candidatosPendentes={};
+function guardarCandidato(id, c){
+  (_candidatosPendentes[id]=_candidatosPendentes[id]||[]).push(c);
+}
+async function escoarCandidatos(id){
+  const par=ss.pares[id], lista=_candidatosPendentes[id];
+  if(!par || !lista || !lista.length) return;
+  for(const c of lista){ try{ await par.pc.addIceCandidate(c); }catch(e){} }
+  delete _candidatosPendentes[id];
+}
+
+/* =========================================================================
+   3) ENTRAR NA SESSÃO — agora com link e diagnóstico
+   ========================================================================= */
+function iniciarSessao(sala, comoHost){
+  if(ss.ativa) return;
+  const cfg=lerConfigSessao();
+  ss.sala = String(sala || idAleatorio(6)).toLowerCase();
+  ss.eu   = {id: idAleatorio(10), nome: nomeParticipante(), cor: CORES_PARES[0]};
+  ss.host = !!comoHost;
+  ss.ativa= true;
+  ss.pares={}; ss.cursores={}; ss.bloqueios={}; ss.versoes={};
+  ss.recebeuEstado = !!comoHost;      /* o anfitrião já tem o desenho que vale */
+  ss.modoManual = cfg.modo==='manual';
+  _candidatosPendentes={};
+  sinal.indice=0; sinal.tentativas=0;
+
+  if(!ss.modoManual){
+    const lista=listaDeServidores();
+    abrirSinalizacao(lista[0], null, ()=>atualizarPainelSessao());
+  }
+  ligarEspiaoDeAlteracoes();
+  montarPainelSessao();
+  atualizarPainelSessao();
+  /* deixa o código na barra de endereço, para poder recarregar sem perder a sala */
+  /* o sistema tem uma variável própria chamada history (desfazer/refazer),
+     que sombreia a do navegador; por isso o acesso é feito por window */
+  try{ window.history.replaceState(null,'','#sala='+ss.sala); }catch(e){}
+  render();
+  toast(comoHost ? `Sessão criada — código ${ss.sala}` : 'Entrando na sessão…','ok');
+}
+function sairSessao(silencioso){
+  if(!ss.ativa) return;
+  publicar({ t:'saiu', de:ss.eu.id, sala:ss.sala });
+  transmitir({t:'saiu'});
+  Object.keys(ss.pares).forEach(id=>{
+    try{ const p=ss.pares[id]; if(p.canal) p.canal.close(); if(p.pc) p.pc.close(); }catch(e){}
+  });
+  fecharSinalizacao();
+  ss.ativa=false; ss.pares={}; ss.cursores={}; ss.bloqueios={};
+  _candidatosPendentes={};
+  const p=$('#sessaoPainel'); if(p) p.classList.remove('show');
+  const b=$('#btnSessao'); if(b) b.classList.remove('on');
+  try{ window.history.replaceState(null,'',location.pathname+location.search); }catch(e){}
+  render();
+  if(!silencioso) toast('Você saiu da sessão compartilhada');
+}
+/* link pronto para enviar ao colega */
+function linkDaSessao(){
+  try{
+    const base=location.origin+location.pathname+location.search;
+    return base+'#sala='+ss.sala;
+  }catch(e){ return '#sala='+ss.sala; }
+}
+/* quem abre o link já entra na sala */
+function verificarLinkDeSessao(){
+  try{
+    const h=String(location.hash||'');
+    const m=h.match(/sala=([a-z0-9]+)/i);
+    if(!m) return false;
+    const sala=m[1].toLowerCase();
+    setTimeout(()=>{
+      abrirModal('👥 Convite para uma sessão',
+        `<p style="margin-top:0;font-size:13px">Você foi convidado para desenhar junto na sala
+          <b style="font-family:Consolas,monospace;letter-spacing:1px">${esc(sala)}</b>.</p>
+         <div class="field"><label>Seu nome (aparece no cursor dos outros)</label>
+           <input id="cvNome" value="${esc(nomeParticipante())}" placeholder="Ex.: Caio Rocha"></div>
+         <div class="dica-inline" style="border-left-color:var(--sel);background:#FDF8EF">
+           Ao entrar, seu desenho atual é substituído pelo do anfitrião, e o que vocês
+           desenharem passa a trafegar entre os participantes.
+         </div>`,
+        `<button class="btn" onclick="fecharModal()">Agora não</button>
+         <button class="btn primary" id="cvEntrar">Entrar na sessão</button>`);
+      const b=$('#cvEntrar');
+      if(b) b.onclick=()=>{
+        const n=($('#cvNome')||{value:''}).value.trim();
+        if(n) definirMeuNome(n);
+        fecharModal();
+        iniciarSessao(sala, false);
+      };
+    }, 2400);   /* espera a abertura terminar */
+    return true;
+  }catch(e){ return false; }
+}
+
+/* =========================================================================
+   4) PAINEL COM DIAGNÓSTICO — mostra o que está acontecendo de verdade
+   ========================================================================= */
+function estadoDaConexao(){
+  if(ss.modoManual) return {txt:'modo manual', cor:'var(--warn)', ok:true};
+  if(!sinal.ws) return {txt:'sem servidor', cor:'var(--err)', ok:false};
+  if(sinal.ws.readyState===0) return {txt:'conectando…', cor:'var(--warn)', ok:false};
+  if(sinal.ws.readyState===1) return {txt:'conectado', cor:'var(--ok)', ok:true};
+  return {txt:'desconectado', cor:'var(--err)', ok:false};
+}
+function atualizarPainelSessao(){
+  const p=$('#sessaoPainel'); if(!p) return;
+  if(!ss.ativa){ p.classList.remove('show'); return; }
+  const pares=Object.keys(ss.pares).map(id=>ss.pares[id]);
+  const cheia=totalNaSala()>=SESSAO_MAX;
+  const con=estadoDaConexao();
+  const sozinho=pares.length===0;
+  p.innerHTML=`
+    <div class="sess-cab">
+      <span class="sess-pt" style="background:${con.cor};box-shadow:0 0 0 3px ${con.cor}22"></span>
+      <b>Sessão</b>
+      <span class="sess-cod" id="sessCodCopiar" title="Clique para copiar o código">${esc(ss.sala)}</span>
+      <button class="sess-x" id="sessFechar" title="Sair da sessão">✕</button>
+    </div>
+    <div class="sess-conex" style="color:${con.cor}">${esc(con.txt)}</div>
+    <div class="sess-lista">
+      <div class="sess-p eu">
+        <span class="sess-bola" style="background:${ss.eu.cor}"></span>
+        <span class="sess-nome">${esc(ss.eu.nome)}</span>
+        <span class="sess-tag">você${ss.host?' · anfitrião':''}</span>
+      </div>
+      ${pares.map(x=>`
+        <div class="sess-p ${x.pronto?'':'ligando'}">
+          <span class="sess-bola" style="background:${x.cor}"></span>
+          <span class="sess-nome">${esc(x.nome)}</span>
+          ${x.pronto?'':'<span class="sess-tag">conectando…</span>'}
+        </div>`).join('')}
+    </div>
+    ${sozinho?`<div class="sess-aviso">
+        ${con.ok?'Aguardando alguém entrar com este código…':'Sem conexão com o servidor — veja “Conexão e rede”'}
+      </div>`:''}
+    <div class="sess-rod">
+      <span>${totalNaSala()} de ${SESSAO_MAX}${cheia?' · cheia':''}</span>
+      <button class="sess-link" id="sessConvidar">＋ Convidar</button>
+    </div>`;
+  p.classList.add('show');
+  const bx=$('#sessFechar'); if(bx) bx.onclick=()=>sairSessao();
+  const bc=$('#sessCodCopiar');
+  if(bc) bc.onclick=()=>copiarTexto(linkDaSessao(),'Link da sessão copiado — envie ao seu colega');
+  const bi=$('#sessConvidar'); if(bi) bi.onclick=modalSessao;
+}
+function copiarTexto(txt, msg){
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt);
+      toast(msg||'Copiado','ok');
+      return true;
+    }
+  }catch(e){}
+  toast(txt);
+  return false;
+}
+
+/* =========================================================================
+   5) MODAL DA SESSÃO — com link, diagnóstico e teste de conexão
+   ========================================================================= */
+function modalSessao(){
+  const cfg=lerConfigSessao();
+  const ativa=ss.ativa;
+  const con=estadoDaConexao();
+  abrirModal('👥 Sessão compartilhada',
+    `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">
+       Permite que até <b>${SESSAO_MAX} pessoas</b> desenhem no mesmo diagrama ao mesmo tempo.
+       Não é preciso criar conta: basta compartilhar o <b>link</b> ou o <b>código</b>.</p>
+     <div class="dica-inline" style="border-left-color:var(--sel);background:#FDF8EF">
+       Com a sessão ativa, o desenho <b>trafega entre os participantes</b>. Isso é diferente do uso
+       individual, em que nada sai da sua máquina.
+     </div>
+     ${ativa?`
+       <div class="sess-box">
+         <div class="sess-box-tit">Sessão em andamento · <span style="color:${con.cor}">${esc(con.txt)}</span></div>
+         <div class="sess-cod-grande" id="sessCodBig">${esc(ss.sala)}</div>
+         <div class="field" style="margin:10px 0 8px">
+           <label>Link para enviar ao seu colega</label>
+           <input id="sessLink" readonly value="${esc(linkDaSessao())}" style="font-size:11.5px">
+         </div>
+         <p style="font-size:12px;color:var(--txt2);margin:0 0 10px">
+           ${totalNaSala()} de ${SESSAO_MAX} na sala.
+           ${Object.keys(ss.pares).length?'':'Ninguém conectado ainda — envie o link acima.'}</p>
+         <div style="display:flex;gap:6px;flex-wrap:wrap">
+           <button class="btn primary sm" id="sessCopiarLink">🔗 Copiar link</button>
+           <button class="btn sm" id="sessCopiar">⧉ Copiar código</button>
+           <button class="btn sm" id="sessTestar">⚡ Testar conexão</button>
+           <button class="btn danger sm" id="sessSair">✕ Encerrar</button>
+         </div>
+       </div>`
+     :`
+       <div class="sess-opcoes">
+         <button class="sess-op" data-sess="criar">
+           <span class="sess-op-ico">✦</span>
+           <b>Criar uma sessão</b>
+           <span>Você compartilha o desenho atual e recebe um link para enviar ao time.</span>
+         </button>
+         <button class="sess-op" data-sess="entrar">
+           <span class="sess-op-ico">⇥</span>
+           <b>Entrar com um código</b>
+           <span>Alguém já criou a sessão e te passou o código ou o link.</span>
+         </button>
+       </div>
+       <div class="field" style="margin-top:14px">
+         <label>Seu nome (aparece no cursor dos outros)</label>
+         <input id="sessNome" value="${esc(nomeParticipante())}" placeholder="Ex.: Caio Rocha">
+       </div>
+       <div id="sessEntrarCx" style="display:none">
+         <div class="field"><label>Código da sessão ou link recebido</label>
+           <input id="sessSala" placeholder="ex.: k7m2xq" maxlength="90"></div>
+         <button class="btn primary sm" id="sessEntrarOk">Entrar na sessão</button>
+       </div>`}
+     <div class="divider"></div>
+     <div class="sec ${cfg.modo==='manual'?'':'fechada'}" data-sec="sessAvanc">
+       <button class="sec-head" data-sectog="sessAvanc"><span class="sec-seta">▾</span><span>Conexão e rede</span></button>
+       <div class="sec-corpo">
+         <div class="dica-inline" style="margin-bottom:10px">
+           A conexão é <b>direta entre os navegadores</b>. O servidor abaixo só apresenta um
+           participante ao outro — o desenho nunca passa por ele.
+         </div>
+         <div class="field"><label>Servidor de apresentação</label>
+           <input id="sessServidor" value="${esc(cfg.servidor||SERVIDORES_PADRAO[0])}">
+           <div class="fieldhint" style="text-align:left">
+             Se não responder, o sistema tenta os outros da lista automaticamente.
+           </div>
+         </div>
+         <label class="dd-check" style="padding-left:0">
+           <input type="checkbox" id="sessManual" ${cfg.modo==='manual'?'checked':''}>
+           modo manual — copiar e colar o código de conexão
+         </label>
+         <div class="fieldhint" style="text-align:left;margin-top:4px">
+           Use quando a rede da empresa bloquear conexões persistentes.
+         </div>
+         ${ss.modoManual&&ss.ativa?`
+           <div class="field" style="margin-top:9px"><label>Seu código de conexão — envie ao outro participante</label>
+             <textarea id="sessCodigo" class="autogrow" rows="3" readonly></textarea></div>
+           <div class="field"><label>Cole aqui o código que você recebeu</label>
+             <textarea id="sessCodigoIn" class="autogrow" rows="3"></textarea></div>
+           <button class="btn sm" id="sessCodigoOk">Processar código recebido</button>`:''}
+         <button class="btn sm" id="sessSalvarCfg" style="margin-top:9px">Salvar preferências</button>
+         <div id="sessDiag" class="sess-diag"></div>
+       </div>
+     </div>`,
+    `<button class="btn" onclick="fecharModal()">Fechar</button>`);
+
+  if(typeof ligarSecoes==='function') ligarSecoes();
+  const nm=$('#sessNome');
+  $$('#modal [data-sess]').forEach(b=>b.onclick=()=>{
+    const a=b.dataset.sess;
+    if(nm && nm.value.trim()) definirMeuNome(nm.value.trim());
+    if(a==='criar'){ fecharModal(); iniciarSessao(null,true); setTimeout(modalSessao,500); }
+    if(a==='entrar'){
+      const cx=$('#sessEntrarCx');
+      if(cx){ cx.style.display='block'; const s=$('#sessSala'); if(s) s.focus(); }
+      $$('#modal [data-sess]').forEach(x=>x.classList.toggle('on',x===b));
+    }
+  });
+  const be=$('#sessEntrarOk');
+  if(be) be.onclick=()=>{
+    let v=($('#sessSala')||{value:''}).value.trim();
+    const m=v.match(/sala=([a-z0-9]+)/i);        /* aceita o link inteiro */
+    const sala=(m?m[1]:v).toLowerCase();
+    if(!sala){ toast('Informe o código ou cole o link','err'); return; }
+    if(nm && nm.value.trim()) definirMeuNome(nm.value.trim());
+    fecharModal(); iniciarSessao(sala,false);
+    setTimeout(modalSessao,600);
+  };
+  const bl=$('#sessCopiarLink');
+  if(bl) bl.onclick=()=>copiarTexto(linkDaSessao(),'Link copiado — envie ao seu colega');
+  const bcp=$('#sessCopiar');
+  if(bcp) bcp.onclick=()=>copiarTexto(ss.sala,'Código copiado');
+  const bs=$('#sessSair'); if(bs) bs.onclick=()=>{ fecharModal(); sairSessao(); };
+  const bt=$('#sessTestar'); if(bt) bt.onclick=testarConexao;
+  const bsv=$('#sessSalvarCfg');
+  if(bsv) bsv.onclick=()=>{
+    const c=lerConfigSessao();
+    c.servidor=($('#sessServidor')||{value:''}).value.trim();
+    c.modo=($('#sessManual')||{checked:false}).checked?'manual':'auto';
+    salvarConfigSessao(c);
+    ss.modoManual=c.modo==='manual';
+    toast('Preferências salvas','ok');
+  };
+  const bco=$('#sessCodigoOk');
+  if(bco) bco.onclick=()=>lerCodigoManual(($('#sessCodigoIn')||{value:''}).value);
+  if(typeof autoGrow==='function'){ autoGrow('#sessCodigo'); autoGrow('#sessCodigoIn'); }
+}
+
+/* diagnóstico honesto: testa cada servidor e relata o resultado */
+function testarConexao(){
+  const cx=$('#sessDiag');
+  const alvo=cx||{innerHTML:''};
+  const lista=listaDeServidores();
+  alvo.innerHTML='<div class="sess-diag-tit">Testando os servidores…</div>';
+  const secao=$('#modal [data-sec="sessAvanc"]');
+  if(secao && secao.classList) secao.classList.remove('fechada');
+  const linhas=[];
+  let feitos=0;
+  lista.forEach((url,i)=>{
+    const t0=Date.now();
+    let acabou=false;
+    const marcar=(ok,obs)=>{
+      if(acabou) return; acabou=true;
+      linhas[i]=`<div class="sess-diag-l">
+          <span class="sess-diag-p" style="background:${ok?'var(--ok)':'var(--err)'}"></span>
+          <span class="sess-diag-u">${esc(url.replace('wss://',''))}</span>
+          <span class="sess-diag-r">${esc(obs)}</span></div>`;
+      feitos++;
+      alvo.innerHTML='<div class="sess-diag-tit">Servidores de apresentação</div>'+linhas.filter(Boolean).join('');
+      if(feitos===lista.length && !linhas.some(l=>l&&l.includes('var(--ok)'))){
+        alvo.innerHTML+=`<div class="sess-diag-obs">Nenhum respondeu. Ative o <b>modo manual</b> acima
+          ou informe um servidor próprio.</div>`;
+      }
+    };
+    try{
+      const w=new WebSocket(url);
+      const prazo=setTimeout(()=>{ try{w.close();}catch(e){} marcar(false,'sem resposta'); }, 5000);
+      w.onopen=()=>{ clearTimeout(prazo); marcar(true, (Date.now()-t0)+' ms'); try{w.close();}catch(e){} };
+      w.onerror=()=>{ clearTimeout(prazo); marcar(false,'falhou'); };
+    }catch(e){ marcar(false,'bloqueado'); }
+  });
+}
+
+/* =========================================================================
+   6) SINCRONIZAÇÃO MAIS FIRME
+   Ao entrar, quem já está na sala envia o estado completo. E o anfitrião
+   reenvia periodicamente, para que ninguém fique com uma versão parcial.
+   ========================================================================= */
+function criarConexao(paraId, iniciador){
+  const cfg=lerConfigSessao();
+  const pc=new RTCPeerConnection({iceServers: cfg.ice || ICE_PADRAO});
+  const par={pc, canal:null, nome:'…', cor:corDoPar(contarPares()), pronto:false};
+  ss.pares[paraId]=par;
+
+  const ligarCanal=(canal)=>{
+    par.canal=canal;
+    canal.onopen=()=>{
+      par.pronto=true;
+      enviarPara(paraId, {t:'ola', id:ss.eu.id, nome:ss.eu.nome, cor:ss.eu.cor,
+                          tem: model.nodes.length + model.pools.length});
+      /* Quem chega PEDE o desenho; quem já está responde. O contrário fazia
+         com que um recém-chegado apagasse o trabalho de quem já estava. */
+      if(!ss.host && !ss.recebeuEstado){
+        enviarPara(paraId, {t:'pedeEstado', de:ss.eu.id});
+      }
+      atualizarPainelSessao();
+      toast(`“${par.nome!=='…'?par.nome:'Participante'}” conectado`,'ok');
+    };
+    canal.onmessage=ev=>{ try{ receber(JSON.parse(ev.data), paraId); }catch(e){} };
+    canal.onclose=()=>{ removerPar(paraId); };
+    canal.onerror=()=>{};
+  };
+
+  if(iniciador){
+    ligarCanal(pc.createDataChannel('cfloxer',{ordered:true}));
+  } else {
+    pc.ondatachannel=ev=>ligarCanal(ev.channel);
+  }
+  pc.onicecandidate=ev=>{
+    if(ev.candidate) publicar({t:'ice', para:paraId, de:ss.eu.id, sala:ss.sala, c:ev.candidate});
+  };
+  pc.onconnectionstatechange=()=>{
+    if(['failed','closed'].includes(pc.connectionState)) removerPar(paraId);
+    atualizarPainelSessao();
+  };
+  pc.oniceconnectionstatechange=()=>{
+    if(pc.iceConnectionState==='failed'){ try{ pc.restartIce&&pc.restartIce(); }catch(e){} }
+  };
+  return par;
+}
+
+/* =========================================================================
+   7) IDENTIDADE VISUAL — a folha de marca do C-Floxer
+   ========================================================================= */
+const IDENTIDADE = {
+  nome:'C-Floxer',
+  descritor:'Flow Builder',
+  ideia:'O C é a própria trilha do processo: um caminho entra, dois saem.',
+  cores:[
+    {n:'Musgo profundo', v:'#233029', u:'Texto, faixa superior, fundo escuro'},
+    {n:'Musgo',          v:'#3D5142', u:'Cor de ação: botões, traço padrão'},
+    {n:'Musgo claro',    v:'#6B8A72', u:'Apoio, etapa de entrada da marca'},
+    {n:'Sálvia',         v:'#A8BFAE', u:'Contornos e elementos secundários'},
+    {n:'Névoa',          v:'#E4EDE7', u:'Superfícies e divisórias'},
+    {n:'Papel',          v:'#F2F7F3', u:'Fundo da área de trabalho'},
+    {n:'Âmbar',          v:'#C08A3E', u:'Seleção, destaque, conexões de saída'},
+    {n:'Âmbar claro',    v:'#E0B978', u:'Âmbar sobre fundo escuro'}
+  ],
+  usos:[
+    ['Assinatura completa','Documentos, apresentações e cabeçalhos'],
+    ['Marca isolada','Ícone de aplicativo, avatar, favicon'],
+    ['Marca compacta','Barra do sistema e qualquer uso abaixo de 40px'],
+    ['Monocromática','Impressão em preto e branco, gravação, carimbo']
+  ],
+  proibicoes:[
+    'Não alterar as proporções entre o arco e os nós',
+    'Não remover as setas de saída — são elas que dizem “construtor”',
+    'Não aplicar sobre fundos de baixo contraste',
+    'Não substituir a tipografia da assinatura',
+    'Não usar a versão completa abaixo de 40px — há a compacta para isso'
+  ]
+};
+
+/* a folha de identidade, desenhada em SVG */
+function folhaIdentidadeSVG(){
+  const L=1240, A=1680;
+  const T=(x,y,t,o)=>{o=o||{};return `<text x="${x}" y="${y}" font-size="${o.s||13}" font-weight="${o.b||400}" `
+    +`fill="${o.c||'#233029'}" font-family="Inter,Arial,sans-serif" ${o.a?`text-anchor="${o.a}"`:''} `
+    +`${o.ls?`letter-spacing="${o.ls}"`:''}>${esc(t)}</text>`;};
+  const R=(x,y,w,h,f,o)=>{o=o||{};return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${o.r||0}" `
+    +`fill="${f}" ${o.s?`stroke="${o.s}" stroke-width="${o.sw||1}"`:''}/>`;};
+  let s=R(0,0,L,A,'#FFFFFF');
+
+  /* faixa superior com a assinatura */
+  s+=R(0,0,L,150,'#233029');
+  s+=logoAssinaturaSVG(56,42,66,'#FFFFFF','#FFFFFF','#CBDACF','#E0B978');
+  s+=T(L-56,74,'IDENTIDADE VISUAL',{s:12,b:800,c:'#8FA896',a:'end',ls:2.4});
+  s+=T(L-56,96,'versão 1.0',{s:11,c:'#6B8A72',a:'end'});
+
+  let y=210;
+  /* 1 — o símbolo */
+  s+=T(56,y,'1 · O símbolo',{s:22,b:800});
+  s+=T(56,y+26,IDENTIDADE.ideia,{s:13,c:'#4F6355'});
+  y+=56;
+  s+=R(56,y,L-112,240,'#F2F7F3',{r:14,s:'#E4EDE7'});
+  s+=logoGrupoSVG(120,y+60,120,'#3D5142','#6B8A72','#C08A3E');
+  /* leitura anotada do símbolo */
+  const notas=[
+    ['Etapa de entrada','o retângulo encaixado no vão'],
+    ['Trilha do processo','o arco, partido em dois trechos'],
+    ['Evento de início','o nó cheio, acima'],
+    ['Evento de fim','o nó vazado, como manda a notação'],
+    ['Ramificação','as duas conexões que saem — o gesto de construir']
+  ];
+  notas.forEach((n,i)=>{
+    const ny=y+52+i*38;
+    s+=`<circle cx="330" cy="${ny-4}" r="4" fill="#C08A3E"/>`;
+    s+=T(348,ny,n[0],{s:13,b:700});
+    s+=T(348,ny+16,n[1],{s:11.5,c:'#6B8A72'});
+  });
+  y+=280;
+
+  /* 2 — variações */
+  s+=T(56,y,'2 · Variações',{s:22,b:800});
+  s+=T(56,y+26,'A completa vale acima de 40px. Abaixo disso, a compacta mantém a leitura.',{s:13,c:'#4F6355'});
+  y+=52;
+  const cards=[
+    {t:'Completa',   f:'#FFFFFF', c:'#3D5142', a:'#6B8A72', se:'#C08A3E', mini:false},
+    {t:'Compacta',   f:'#FFFFFF', c:'#3D5142', a:'#6B8A72', se:'#C08A3E', mini:true},
+    {t:'Sobre escuro',f:'#233029', c:'#FFFFFF', a:'#CBDACF', se:'#E0B978', mini:false},
+    {t:'Monocromática',f:'#F2F7F3',c:'#233029', a:'#233029', se:'#233029', mini:false}
+  ];
+  cards.forEach((c,i)=>{
+    const x=56+i*((L-112)/4);
+    const w=(L-112)/4-14;
+    s+=R(x,y,w,150,c.f,{r:12,s:'#E4EDE7'});
+    const k=(c.mini?76:82)/64;
+    s+=`<g transform="translate(${x+w/2-32*k},${y+34}) scale(${k.toFixed(3)})">`
+      +(c.mini?logoMiniSVG(c.c,c.a,c.se):logoMarcaSVG(c.c,c.a,c.se))+`</g>`;
+    s+=T(x+w/2,y+132,c.t,{s:11.5,b:700,a:'middle',c:c.f==='#233029'?'#CBDACF':'#4F6355'});
+  });
+  y+=190;
+
+  /* 3 — paleta */
+  s+=T(56,y,'3 · Paleta',{s:22,b:800});
+  s+=T(56,y+26,'Musgo como base, âmbar como destaque. A cor não decora: informa.',{s:13,c:'#4F6355'});
+  y+=52;
+  IDENTIDADE.cores.forEach((c,i)=>{
+    const col=i%4, lin=Math.floor(i/4);
+    const x=56+col*((L-112)/4), w=(L-112)/4-14;
+    s+=R(x,y+lin*112,w,64,c.v,{r:10,s:'#E4EDE7'});
+    s+=T(x,y+lin*112+84,c.n,{s:12.5,b:700});
+    s+=T(x,y+lin*112+100,c.v,{s:11,c:'#6B8A72'});
+  });
+  y+=250;
+
+  /* 4 — tipografia e usos */
+  s+=T(56,y,'4 · Tipografia e usos',{s:22,b:800});
+  y+=44;
+  s+=R(56,y,(L-140)/2,150,'#F2F7F3',{r:12,s:'#E4EDE7'});
+  s+=T(80,y+38,'Inter',{s:30,b:800});
+  s+=T(80,y+62,'Peso 800 no nome · 600 no descritor',{s:12,c:'#4F6355'});
+  s+=T(80,y+86,'Peso 700 nos títulos · 400 no texto corrido',{s:12,c:'#4F6355'});
+  s+=T(80,y+118,'ABCDEFGHIJKLM abcdefghijklm 0123456789',{s:13,c:'#6B8A72'});
+  const x2=56+(L-140)/2+28;
+  s+=R(x2,y,(L-140)/2,150,'#F2F7F3',{r:12,s:'#E4EDE7'});
+  IDENTIDADE.usos.forEach((u,i)=>{
+    s+=T(x2+24,y+34+i*30,'· '+u[0],{s:12.5,b:700});
+    s+=T(x2+24,y+34+i*30+14,'  '+u[1],{s:11,c:'#6B8A72'});
+  });
+  y+=190;
+
+  /* 5 — o que não fazer */
+  s+=T(56,y,'5 · O que não fazer',{s:22,b:800});
+  y+=40;
+  s+=R(56,y,L-112,IDENTIDADE.proibicoes.length*28+28,'#FDF3F3',{r:12,s:'#F0D9D9'});
+  IDENTIDADE.proibicoes.forEach((p,i)=>{
+    s+=T(84,y+34+i*28,'✕',{s:13,b:800,c:'#C0392B'});
+    s+=T(108,y+34+i*28,p,{s:12.5,c:'#5A3A3A'});
+  });
+
+  /* rodapé */
+  s+=T(56,A-40,'C-Floxer · Flow Builder — identidade visual',{s:11,c:'#94A89A'});
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${L}" height="${A}" viewBox="0 0 ${L} ${A}">${s}</svg>`;
+}
+/* baixar a folha de identidade */
+function baixarIdentidade(){
+  baixar('C-Floxer_identidade_visual.svg', folhaIdentidadeSVG(), 'image/svg+xml;charset=utf-8');
+  toast('Folha de identidade baixada','ok');
+}
+
+/* a marca ampliada ganha a aba de identidade */
+function modalMarca(){
+  const fundo = mkVariante==='escuro'||mkVariante==='branca' ? 'escuro' : (mkVariante==='mono'?'papel':'claro');
+  abrirModal('◈ Marca do C-Floxer',
+    `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">${esc(IDENTIDADE.ideia)}
+      As duas setas de saída são o que diferencia um desenho de um <b>construtor</b> de fluxos.</p>
+     <div class="mk-vars" id="mkVars">
+       ${[['claro','Colorida'],['escuro','Fundo escuro'],['mono','Monocromática'],['branca','Branca']]
+         .map(([k,l])=>`<button class="mk-var ${k===mkVariante?'on':''}" data-mkv="${k}">${esc(l)}</button>`).join('')}
+     </div>
+     <div class="mk-palco ${fundo}" id="mkPalco">${marcaGrandeSVG()}</div>
+     <div class="mk-acoes">
+       <button class="btn primary sm" id="mkCopiar">⧉ Copiar imagem</button>
+       <button class="btn sm" id="mkPng">⤓ PNG</button>
+       <button class="btn sm" id="mkSvg">⤓ SVG</button>
+       <button class="btn sm" id="mkIcone">⤓ Só o ícone</button>
+       <button class="btn sm" id="mkIdent">📄 Folha de identidade</button>
+     </div>
+     <div class="divider"></div>
+     <div class="mk-paleta">
+       ${IDENTIDADE.cores.map(c=>`
+         <div class="mk-cor" data-cor="${c.v}" title="${esc(c.u)} — clique para copiar">
+           <span style="background:${c.v}"></span>
+           <b>${esc(c.n)}</b><i>${c.v}</i>
+         </div>`).join('')}
+     </div>`,
+    `<button class="btn" onclick="fecharModal()">Fechar</button>`);
+  const repintar=()=>{
+    const p=$('#mkPalco'); if(!p) return;
+    p.className='mk-palco '+(mkVariante==='escuro'||mkVariante==='branca'?'escuro':(mkVariante==='mono'?'papel':'claro'));
+    p.innerHTML=marcaGrandeSVG();
+  };
+  $$('#modal [data-mkv]').forEach(b=>b.onclick=()=>{
+    mkVariante=b.dataset.mkv;
+    $$('#modal [data-mkv]').forEach(x=>x.classList.toggle('on',x===b));
+    repintar();
+  });
+  $$('#modal [data-cor]').forEach(c=>c.onclick=()=>copiarTexto(c.dataset.cor,'Cor '+c.dataset.cor+' copiada'));
+  const bs=$('#mkSvg');
+  if(bs) bs.onclick=()=>{ baixar('C-Floxer_marca_'+mkVariante+'.svg', marcaGrandeSVG(),'image/svg+xml;charset=utf-8');
+    toast('SVG da marca baixado','ok'); };
+  const bp=$('#mkPng');
+  if(bp) bp.onclick=()=>marcaParaPNG(marcaGrandeSVG(),3,b=>{
+    baixar('C-Floxer_marca_'+mkVariante+'.png',b); toast('PNG baixado','ok'); });
+  const bi=$('#mkIcone');
+  if(bi) bi.onclick=()=>{
+    const conf={claro:['#3D5142','#6B8A72','#C08A3E'], escuro:['#FFFFFF','#CBDACF','#E0B978'],
+                mono:['#233029','#233029','#233029'], branca:['#FFFFFF','#FFFFFF','#FFFFFF']}[mkVariante];
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64">${logoMiniSVG(conf[0],conf[1],conf[2])}</svg>`;
+    marcaParaPNG(svg,2,b=>{ baixar('C-Floxer_icone_'+mkVariante+'.png',b); toast('Ícone baixado','ok'); });
+  };
+  const bid=$('#mkIdent'); if(bid) bid.onclick=baixarIdentidade;
+  const bc=$('#mkCopiar');
+  if(bc) bc.onclick=()=>marcaParaPNG(marcaGrandeSVG(),3,async b=>{
+    try{
+      if(navigator.clipboard && navigator.clipboard.write && typeof ClipboardItem!=='undefined'){
+        await navigator.clipboard.write([new ClipboardItem({'image/png':b})]);
+        toast('Marca copiada','ok');
+      } else throw new Error('sem suporte');
+    }catch(e){ baixar('C-Floxer_marca_'+mkVariante+'.png',b); toast('A imagem foi baixada','ok'); }
+  });
+}
+
+/* =========================================================================
+   8) ESTILOS DO QUE FOI ACRESCENTADO
+   ========================================================================= */
+(function(){
+  const css=`
+  .sess-conex{font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;
+    padding:0 12px 6px;margin-top:-4px}
+  .sess-aviso{font-size:11px;color:var(--txt3);padding:2px 12px 8px;line-height:1.45}
+  .sess-diag{margin-top:10px}
+  .sess-diag-tit{font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+    color:var(--txt3);margin-bottom:6px}
+  .sess-diag-l{display:flex;align-items:center;gap:7px;font-size:11.5px;padding:3px 0}
+  .sess-diag-p{width:7px;height:7px;border-radius:50%;flex:0 0 7px}
+  .sess-diag-u{flex:1;font-family:Consolas,monospace;font-size:11px;color:var(--txt2);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sess-diag-r{font-weight:700;color:var(--txt3);font-size:10.5px}
+  .sess-diag-obs{font-size:11px;color:var(--txt2);margin-top:7px;line-height:1.5}
+  #sessLink{font-family:Consolas,monospace;background:#fff}
+  .mk-paleta{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px}
+  .mk-cor{border:1px solid var(--line);border-radius:9px;overflow:hidden;cursor:pointer;background:#fff}
+  .mk-cor:hover{border-color:var(--acao);box-shadow:0 2px 8px rgba(35,48,41,.10)}
+  .mk-cor span{display:block;height:38px}
+  .mk-cor b{display:block;font-size:11px;padding:5px 8px 0}
+  .mk-cor i{display:block;font-style:normal;font-size:9.5px;color:var(--txt3);
+    font-family:Consolas,monospace;padding:0 8px 7px}
+  `;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   9) ARRANQUE
+   ========================================================================= */
+function initSessaoV26(){
+  /* quem abriu por link já recebe o convite */
+  verificarLinkDeSessao();
+  /* recupera a sessão ao recarregar a página */
+  window.addEventListener('hashchange', ()=>{
+    if(!ss.ativa) verificarLinkDeSessao();
+  });
+}
+(function(){
+  function arrancar(){ try{ initSessaoV26(); }catch(e){} }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,300));
+  else setTimeout(arrancar,300);
 })();
 
 </script>
