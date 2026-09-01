@@ -17482,4 +17482,602 @@ function modalRelatorioSim(){
 })();
 
 </script>
+<script>
+/* =========================================================================
+   C-Floxer v30 — CÂMERA QUE ACOMPANHA A SIMULAÇÃO
+   Na apresentação, a tela segue o token: quem assiste nunca perde de vista
+   onde o processo está. O movimento é suave e só acontece quando precisa.
+   ========================================================================= */
+
+/* estado da câmera */
+let cam = {
+  seguir: true,          /* acompanhar o token automaticamente */
+  zoom: 1.7,             /* aproximação enquanto acompanha */
+  animando: false,
+  raf: null,
+  alvo: null,            /* {x,y,w,h} para onde estamos indo */
+  ultimoNo: null,        /* evita reenquadrar no mesmo elemento */
+  margem: 0.34,          /* fração da tela que forma a zona de conforto */
+  vbAntes: null          /* enquadramento anterior ao ligar o acompanhamento */
+};
+
+const CAM_NIVEIS = [
+  {id:'perto',  nome:'Perto',   z:2.4, rot:'Perto'},
+  {id:'medio',  nome:'Médio',   z:1.7, rot:'Médio'},
+  {id:'amplo',  nome:'Amplo',   z:1.15, rot:'Amplo'},
+  {id:'tudo',   nome:'Tudo',    z:0,   rot:'Tudo'}    /* 0 = mostra o fluxo inteiro */
+];
+let camNivel = 'medio';
+
+/* =========================================================================
+   1) ONDE ESTÁ A AÇÃO
+   O ponto de interesse é o token vivo; havendo vários, o centro entre eles.
+   ========================================================================= */
+function focoDaSimulacao(){
+  if(!sim.ativa) return null;
+  const vivos=sim.tokens.filter(t=>t.vivo);
+  if(!vivos.length) return null;
+  const pontos=vivos.map(t=>posicaoToken(t)).filter(Boolean);
+  if(!pontos.length) return null;
+
+  /* um token: enquadra o elemento onde ele está, não só o ponto */
+  if(pontos.length===1){
+    const t=vivos[0];
+    const n=t.edge ? null : nodeById(t.no);
+    if(n) return {x:n.x, y:n.y, w:n.w, h:n.h, ponto:pontos[0], no:n.id};
+    /* em trânsito: enquadra o trecho entre origem e destino */
+    const e=edgeById(t.edge);
+    const a=e?nodeById(e.source):null, b=e?nodeById(e.target):null;
+    if(a&&b){
+      const x=Math.min(a.x,b.x), y=Math.min(a.y,b.y);
+      const w=Math.max(a.x+a.w,b.x+b.w)-x, h=Math.max(a.y+a.h,b.y+b.h)-y;
+      return {x, y, w, h, ponto:pontos[0], no:null};
+    }
+    return {x:pontos[0].x-90, y:pontos[0].y-60, w:180, h:120, ponto:pontos[0], no:null};
+  }
+
+  /* vários tokens: enquadra todos, para o paralelo ser visível por inteiro */
+  const xs=[], ys=[];
+  vivos.forEach(t=>{
+    const n=nodeById(t.no);
+    const p=posicaoToken(t);
+    if(n){ xs.push(n.x, n.x+n.w); ys.push(n.y, n.y+n.h); }
+    else if(p){ xs.push(p.x-60, p.x+60); ys.push(p.y-40, p.y+40); }
+  });
+  if(!xs.length) return null;
+  const x=Math.min(...xs), y=Math.min(...ys);
+  return {x, y, w:Math.max(...xs)-x, h:Math.max(...ys)-y,
+          ponto:{x:(Math.min(...xs)+Math.max(...xs))/2, y:(Math.min(...ys)+Math.max(...ys))/2},
+          no:null, varios:true};
+}
+
+/* =========================================================================
+   2) A CÂMERA NA APRESENTAÇÃO
+   O enquadramento é a viewBox do SVG. Mover a câmera é animar esse retângulo.
+   ========================================================================= */
+function limitesDoPalco(){
+  const s=$('#apStage') && $('#apStage').querySelector ? $('#apStage').querySelector('svg') : null;
+  const W=(s && +s.dataset.w) || 1600;
+  const H=(s && +s.dataset.h) || 900;
+  return {W, H};
+}
+/* converte a coordenada do modelo para a do palco (que tem a folga do padding) */
+function paraPalco(p){
+  const dx=(ap.pad||50)-((ap.base&&ap.base.x)||0);
+  const dy=(ap.pad||50)-((ap.base&&ap.base.y)||0);
+  return {x:p.x+dx, y:p.y+dy};
+}
+/* o retângulo que a câmera deve mostrar, dado o foco e o nível de zoom */
+function enquadramentoDesejado(foco){
+  const {W,H}=limitesDoPalco();
+  const nivel=CAM_NIVEIS.find(n=>n.id===camNivel)||CAM_NIVEIS[1];
+  if(nivel.z===0) return {x:0, y:0, w:W, h:H};
+
+  const razao = (ap.vb && ap.vb.w && ap.vb.h) ? (ap.vb.w/ap.vb.h) : (W/H);
+  /* área visível proporcional ao nível escolhido */
+  let vw = W/nivel.z;
+  let vh = vw/razao;
+  /* nunca menor que o que precisa caber */
+  const c1=paraPalco({x:foco.x, y:foco.y});
+  const folga=140;
+  vw=Math.max(vw, foco.w+folga*2);
+  vh=Math.max(vh, foco.h+folga*2);
+  /* nem maior que o palco */
+  vw=Math.min(vw, W); vh=Math.min(vh, H);
+
+  const centro=paraPalco(foco.ponto);
+  let x=centro.x-vw/2, y=centro.y-vh/2;
+  /* mantém o enquadramento dentro dos limites do desenho */
+  x=Math.max(0, Math.min(x, W-vw));
+  y=Math.max(0, Math.min(y, H-vh));
+  return {x, y, w:vw, h:vh};
+}
+/* o foco já está confortavelmente visível? */
+function focoEstaVisivel(foco){
+  if(!ap.vb) return false;
+  const p=paraPalco(foco.ponto);
+  const mx=ap.vb.w*cam.margem, my=ap.vb.h*cam.margem;
+  return p.x > ap.vb.x+mx && p.x < ap.vb.x+ap.vb.w-mx
+      && p.y > ap.vb.y+my && p.y < ap.vb.y+ap.vb.h-my;
+}
+/* anima a viewBox até o destino, com suavização */
+function moverCamera(destino, duracao){
+  if(!ap.vb || !destino) return;
+  if(cam.raf){ cancelAnimationFrame(cam.raf); cam.raf=null; }
+  const ini={...ap.vb};
+  const dur=duracao || Math.max(220, Math.min(620, velocidadeMs()*0.7));
+  const t0=(typeof performance!=='undefined' && performance.now) ? performance.now() : Date.now();
+  cam.animando=true;
+  const suave=t=>t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2;   /* acelera e desacelera */
+  const passo=()=>{
+    const agora=(typeof performance!=='undefined' && performance.now) ? performance.now() : Date.now();
+    const t=Math.min(1,(agora-t0)/dur);
+    const k=suave(t);
+    ap.vb={
+      x: ini.x+(destino.x-ini.x)*k,
+      y: ini.y+(destino.y-ini.y)*k,
+      w: ini.w+(destino.w-ini.w)*k,
+      h: ini.h+(destino.h-ini.h)*k
+    };
+    aplicarVB();
+    if(t<1){ cam.raf=requestAnimationFrame(passo); }
+    else { cam.raf=null; cam.animando=false; }
+  };
+  /* movimento muito curto não compensa animar: aplica direto */
+  const dist=Math.abs(destino.x-ini.x)+Math.abs(destino.y-ini.y)
+            +Math.abs(destino.w-ini.w)+Math.abs(destino.h-ini.h);
+  if(dist<2 || typeof requestAnimationFrame!=='function'){
+    ap.vb={...destino}; aplicarVB(); cam.animando=false; cam.raf=null;
+    return;
+  }
+  cam.raf=requestAnimationFrame(passo);
+}
+/* chamado a cada passo da simulação */
+function acompanharToken(forcar){
+  if(!sim.ativa || sim.palco!=='apresentar' || !cam.seguir) return;
+  const foco=focoDaSimulacao();
+  if(!foco) return;
+  /* já visível e no mesmo elemento: não mexe, para não enjoar quem assiste */
+  if(!forcar && foco.no && foco.no===cam.ultimoNo && focoEstaVisivel(foco)) return;
+  if(!forcar && !foco.no && focoEstaVisivel(foco)) return;
+  cam.ultimoNo=foco.no||cam.ultimoNo;
+  cam.alvo=foco;
+  const destino=enquadramentoDesejado(foco);
+  cam.destino={...destino};
+  moverCamera(destino);
+}
+/* liga e desliga o acompanhamento */
+function alternarSeguir(){
+  cam.seguir=!cam.seguir;
+  if(cam.seguir){
+    cam.vbAntes=ap.vb?{...ap.vb}:null;
+    cam.ultimoNo=null;
+    acompanharToken(true);
+    toast('A tela vai acompanhar o processo','ok');
+  } else {
+    if(cam.raf){ cancelAnimationFrame(cam.raf); cam.raf=null; cam.animando=false; }
+    toast('Acompanhamento desligado — você controla a tela');
+  }
+  atualizarBarraSimAp();
+}
+function trocarNivelCamera(){
+  const i=CAM_NIVEIS.findIndex(n=>n.id===camNivel);
+  camNivel=CAM_NIVEIS[(i+1)%CAM_NIVEIS.length].id;
+  const n=CAM_NIVEIS.find(x=>x.id===camNivel);
+  if(cam.seguir) acompanharToken(true);
+  else if(n.z===0 && typeof visaoGeralAp==='function') visaoGeralAp();
+  atualizarBarraSimAp();
+  toast('Enquadramento: '+n.nome);
+}
+
+/* =========================================================================
+   3) O PASSO DA SIMULAÇÃO PASSA A MOVER A CÂMERA
+   ========================================================================= */
+function desenharSimNaApresentacao(){
+  const stage=$('#apStage'); if(!stage) return;
+  const svg=stage.querySelector('svg'); if(!svg) return;
+  let g=svg.querySelector('#simCamadaAp');
+  if(!g){
+    const NS='http://www.w3.org/2000/svg';
+    g=document.createElementNS(NS,'g');
+    g.setAttribute('id','simCamadaAp');
+    g.setAttribute('style','pointer-events:none');
+    svg.appendChild(g);
+  }
+  const dx=(ap.pad||50)-((ap.base&&ap.base.x)||0);
+  const dy=(ap.pad||50)-((ap.base&&ap.base.y)||0);
+  g.setAttribute('transform',`translate(${dx},${dy})`);
+  g.innerHTML=tokensSVG().replace(/^<g[^>]*>/,'').replace(/<\/g>$/,'');
+  /* a câmera acompanha depois de o desenho estar pronto */
+  acompanharToken();
+  atualizarBussola();
+}
+
+/* =========================================================================
+   4) BÚSSOLA — mostra onde a ação está dentro do processo inteiro
+   Um mapa reduzido no canto: o retângulo indica o que está na tela.
+   ========================================================================= */
+function atualizarBussola(){
+  const b=$('#apBussola');
+  if(!b) return;
+  if(!sim.ativa || sim.palco!=='apresentar' || !ap.vb){ b.classList.remove('show'); return; }
+  const {W,H}=limitesDoPalco();
+  if(!W||!H){ b.classList.remove('show'); return; }
+  /* mostra só quando a tela não abrange o processo inteiro */
+  const abrangeTudo = ap.vb.w>=W*0.94 && ap.vb.h>=H*0.94;
+  b.classList.toggle('show', !abrangeTudo);
+  if(abrangeTudo) return;
+
+  const LARG=168, ALT=Math.max(56, Math.round(LARG*H/W));
+  const k=LARG/W;
+  const nos=model.nodes.filter(n=>ehNoDeFluxo(n));
+  const dx=(ap.pad||50)-((ap.base&&ap.base.x)||0);
+  const dy=(ap.pad||50)-((ap.base&&ap.base.y)||0);
+  let s=`<svg width="${LARG}" height="${ALT}" viewBox="0 0 ${LARG} ${ALT}">`;
+  s+=`<rect width="${LARG}" height="${ALT}" rx="6" fill="rgba(255,255,255,.06)"/>`;
+  /* silhueta do processo */
+  nos.forEach(n=>{
+    const visitado=sim.trilha[n.id];
+    s+=`<rect x="${((n.x+dx)*k).toFixed(1)}" y="${((n.y+dy)*k*ALT/(H*k)).toFixed(1)}"
+         width="${Math.max(2,n.w*k).toFixed(1)}" height="${Math.max(2,n.h*k*ALT/(H*k)).toFixed(1)}"
+         rx="1.5" fill="${visitado?'#C08A3E':'rgba(255,255,255,.28)'}"
+         opacity="${visitado?'.85':'.5'}"/>`;
+  });
+  /* onde os tokens estão */
+  sim.tokens.filter(t=>t.vivo).forEach(t=>{
+    const p=posicaoToken(t);
+    if(!p) return;
+    const q=paraPalco(p);
+    s+=`<circle cx="${(q.x*k).toFixed(1)}" cy="${(q.y*k*ALT/(H*k)).toFixed(1)}" r="3.4" fill="${t.cor}" stroke="#fff" stroke-width="1"/>`;
+  });
+  /* retângulo do que está na tela */
+  s+=`<rect x="${(ap.vb.x*k).toFixed(1)}" y="${(ap.vb.y*k*ALT/(H*k)).toFixed(1)}"
+       width="${(ap.vb.w*k).toFixed(1)}" height="${(ap.vb.h*k*ALT/(H*k)).toFixed(1)}"
+       fill="none" stroke="#fff" stroke-width="1.6" rx="2" opacity=".95"/>`;
+  s+=`</svg>`;
+  b.innerHTML=s;
+}
+function montarBussola(){
+  const palco=$('#apPalco');
+  if(!palco || $('#apBussola')) return;
+  const d=document.createElement('div');
+  d.id='apBussola';
+  d.title='Onde a simulação está dentro do processo';
+  palco.appendChild(d);
+}
+
+/* =========================================================================
+   5) A BARRA GANHA OS CONTROLES DE CÂMERA
+   ========================================================================= */
+function montarBarraSimAp(){
+  const palco=$('#apPalco'); if(!palco) return;
+  montarBussola();
+  if($('#apSimBar')) return;
+  const d=document.createElement('div');
+  d.id='apSimBar';
+  d.innerHTML=`<span class="asb-t">▶ Simulação</span>
+    <button id="asbPlay" title="Executar / pausar">▶</button>
+    <button id="asbPasso" title="Avançar um passo">⇥</button>
+    <button id="asbReiniciar" title="Repetir do início">⏮</button>
+    <span class="asb-sep"></span>
+    <button id="asbSeguir" title="A tela acompanha o processo (A)">◎ Acompanhar</button>
+    <button id="asbZoom" title="Enquadramento (Z)">Médio</button>
+    <span class="asb-sep"></span>
+    <span class="asb-i" id="asbInfo">—</span>
+    <button id="asbSair" title="Encerrar simulação">✕</button>`;
+  palco.appendChild(d);
+  const g=id=>$('#'+id);
+  if(g('asbPlay')) g('asbPlay').onclick=()=>{
+    if(sim.terminou) repetirSimulacao();
+    else if(sim.rodando) pausarSimulacao();
+    else rodarSimulacao();
+    atualizarBarraSimAp();
+  };
+  if(g('asbPasso')) g('asbPasso').onclick=()=>{ avancarSimulacao(); atualizarBarraSimAp(); };
+  if(g('asbReiniciar')) g('asbReiniciar').onclick=()=>{ repetirSimulacao(); atualizarBarraSimAp(); };
+  if(g('asbSeguir')) g('asbSeguir').onclick=alternarSeguir;
+  if(g('asbZoom')) g('asbZoom').onclick=trocarNivelCamera;
+  if(g('asbSair')) g('asbSair').onclick=()=>{ fecharSimulacao(); atualizarBarraSimAp(); };
+}
+function atualizarBarraSimAp(){
+  const b=$('#apSimBar'); if(!b) return;
+  b.classList.toggle('show', sim.ativa && sim.palco==='apresentar');
+  const p=$('#asbPlay');
+  if(p){
+    p.textContent = sim.terminou ? '↻' : (sim.rodando ? '⏸' : '▶');
+    p.title = sim.terminou ? 'Repetir a simulação' : (sim.rodando ? 'Pausar' : 'Executar');
+    if(p.classList) p.classList.toggle('repetir', !!sim.terminou);
+  }
+  const s=$('#asbSeguir');
+  if(s){
+    s.textContent = cam.seguir ? '◎ Acompanhando' : '○ Acompanhar';
+    if(s.classList) s.classList.toggle('on', !!cam.seguir);
+    s.title = cam.seguir ? 'A tela segue o processo — clique para controlar você mesmo'
+                         : 'Deixar a tela seguir o processo';
+  }
+  const z=$('#asbZoom');
+  if(z){
+    const n=CAM_NIVEIS.find(x=>x.id===camNivel)||CAM_NIVEIS[1];
+    z.textContent=n.rot;
+  }
+  const i=$('#asbInfo');
+  if(i){
+    if(!sim.ativa) i.textContent='—';
+    else if(sim.terminou) i.textContent=`concluída · ${coberturaSim()}% do fluxo`;
+    else {
+      const foco=focoDaSimulacao();
+      const onde=foco&&foco.no ? (nodeById(foco.no)||{}).name : null;
+      i.textContent = onde ? `em “${onde.length>28?onde.slice(0,26)+'…':onde}”`
+                           : `${sim.tokens.filter(t=>t.vivo).length} token(s) · ${coberturaSim()}%`;
+    }
+  }
+  atualizarBussola();
+}
+
+/* =========================================================================
+   6) LEGENDA DA ETAPA — o que está acontecendo agora
+   Um rótulo discreto no rodapé, que acompanha o token.
+   ========================================================================= */
+function montarLegendaSim(){
+  const palco=$('#apPalco');
+  if(!palco || $('#apSimLegenda')) return;
+  const d=document.createElement('div');
+  d.id='apSimLegenda';
+  palco.appendChild(d);
+}
+function atualizarLegendaSim(){
+  const l=$('#apSimLegenda');
+  if(!l) return;
+  if(!sim.ativa || sim.palco!=='apresentar'){ l.classList.remove('show'); cam.legendaNo=null; return; }
+  const foco=focoDaSimulacao();
+  let n=foco&&foco.no ? nodeById(foco.no) : null;
+  /* Enquanto o token viaja pela seta não há elemento sob ele. Mantém a
+     última etapa em cena: piscar a legenda a cada passo cansaria quem assiste. */
+  if(!n && cam.legendaNo) n=nodeById(cam.legendaNo);
+  if(!n){ l.classList.remove('show'); return; }
+  cam.legendaNo=n.id;
+  const d=T[n.type]||{};
+  const quem=n.resp||laneName(n.laneId)||'';
+  l.innerHTML=`<div class="asl-cx">
+      <span class="asl-tipo">${esc(d.label||'')}</span>
+      <b>${esc(n.name||d.label||'')}</b>
+      ${quem?`<span class="asl-quem">${esc(quem)}</span>`:''}
+      ${n.sistema?`<span class="asl-sis">▤ ${esc(n.sistema)}</span>`:''}
+      ${n.tempo?`<span class="asl-tempo">⏱ ${esc(n.tempo)}</span>`:''}
+    </div>`;
+  l.classList.add('show');
+}
+
+/* =========================================================================
+   7) ENTRADA E SAÍDA DA SIMULAÇÃO NA APRESENTAÇÃO
+   ========================================================================= */
+function simularNaApresentacao(){
+  montarBarraSimAp();
+  montarLegendaSim();
+  if(typeof ligarGestosCamera==='function') ligarGestosCamera();
+  if(iniciarSimulacao('apresentar')){
+    const p=$('#simPainel'); if(p) p.classList.remove('show');
+    /* guarda o enquadramento atual, para devolver ao encerrar */
+    cam.vbAntes = ap.vb ? {...ap.vb} : null;
+    cam.ultimoNo=null; cam.legendaNo=null;
+    cam.seguir=true;
+    acompanharToken(true);
+    atualizarBarraSimAp();
+    atualizarLegendaSim();
+    toast('A tela vai acompanhar o processo — use ◎ para desligar','ok');
+  }
+}
+/* ao encerrar, devolve a visão do processo inteiro */
+function fecharSimulacao(){
+  const eraApresentacao = sim.ativa && sim.palco==='apresentar';
+  sim.ativa=false; sim.rodando=false; sim.terminou=false;
+  if(sim.timer){ clearTimeout(sim.timer); sim.timer=null; }
+  sim.tokens=[]; sim.trilha={}; sim.aguardando=null; sim.usos={}; sim.ciclos=0;
+  const p=$('#simPainel'); if(p) p.classList.remove('show');
+  const b=$('#tbSimular'); if(b) b.classList.remove('on');
+  if(cam.raf){ cancelAnimationFrame(cam.raf); cam.raf=null; cam.animando=false; }
+  cam.ultimoNo=null; cam.legendaNo=null; cam.destino=null;
+  fecharDecisaoAp();
+  limparSimNaApresentacao();
+  const l=$('#apSimLegenda'); if(l) l.classList.remove('show');
+  const bu=$('#apBussola'); if(bu) bu.classList.remove('show');
+  atualizarBarraSimAp();
+  if(eraApresentacao && typeof visaoGeralAp==='function'){
+    /* volta suavemente à visão do processo inteiro */
+    const {W,H}=limitesDoPalco();
+    moverCamera({x:0,y:0,w:W,h:H}, 420);
+    setTimeout(()=>{
+      try{ visaoGeralAp(); }catch(e){}
+      cam.animando=false; cam.destino=null;
+    }, 460);
+  } else { cam.animando=false; cam.destino=null; }
+  render();
+}
+
+/* =========================================================================
+   8) A DECISÃO TAMBÉM ENQUADRA
+   Quando a simulação para para perguntar, a tela vai até o gateway.
+   ========================================================================= */
+function perguntaDecisaoAp(a){
+  const palco=$('#apPalco'); if(!palco) return;
+  /* enquadra o ponto de decisão antes de perguntar */
+  const g=nodeById(a.no);
+  if(g && cam.seguir){
+    cam.ultimoNo=null;
+    moverCamera(enquadramentoDesejado({
+      x:g.x, y:g.y, w:g.w, h:g.h, ponto:{x:g.x+g.w/2, y:g.y+g.h/2}, no:g.id
+    }), 340);
+  }
+  let cx=$('#apDecisao');
+  if(!cx){
+    cx=document.createElement('div');
+    cx.id='apDecisao';
+    palco.appendChild(cx);
+  }
+  const n=nodeById(a.no);
+  cx.innerHTML=`
+    <div class="apd-cx">
+      <div class="apd-cab">
+        <span class="apd-ico">◆</span>
+        <div>
+          <b>${esc(n?n.name||'Decisão':'Decisão')}</b>
+          <span>Qual caminho o processo segue?</span>
+        </div>
+      </div>
+      <div class="apd-ops">
+        ${a.opcoes.map((o,i)=>`
+          <button class="apd-op ${o.jaFeito?'feito':''}" data-apd="${o.edge}">
+            <span class="apd-n">${i+1}</span>
+            <span class="apd-txt">
+              <b>${esc(o.rotulo)}</b>
+              <span>→ ${esc(o.destino)}</span>
+            </span>
+            ${o.jaFeito?'<span class="apd-tag ok">já percorrido</span>'
+                       :'<span class="apd-tag novo">caminho novo</span>'}
+          </button>`).join('')}
+      </div>
+      <div class="apd-rod">
+        <span>Tecle <b>1</b>–<b>${Math.min(9,a.opcoes.length)}</b> para escolher · <b>Esc</b> encerra</span>
+        <button class="apd-auto" id="apdAuto">⇄ Deixar o C-Floxer percorrer tudo</button>
+      </div>
+    </div>`;
+  cx.classList.add('show');
+  cx.querySelectorAll('[data-apd]').forEach(b=>b.onclick=()=>responderDecisao(b.dataset.apd));
+  const ba=$('#apdAuto');
+  if(ba) ba.onclick=()=>{
+    sim.autoDecidir=true;
+    fecharDecisaoAp();
+    const t=sim.tokens.find(x=>x.id===a.token);
+    if(t) t.esperando=false;
+    sim.aguardando=null;
+    registrarHistorico('⇄ Passou a validar todas as bifurcações automaticamente','ramo');
+    atualizarPainelSim();
+    rodarSimulacao();
+  };
+}
+
+/* a resposta à decisão também atualiza a legenda */
+function responderDecisao(edgeId){
+  const a=sim.aguardando; if(!a) return;
+  const e=edgeById(edgeId);
+  const t=sim.tokens.find(x=>x.id===a.token);
+  fecharDecisaoAp();
+  if(t && e){
+    t.esperando=false;
+    registrarHistorico('◆ Você escolheu "'+(e.name||'sem rótulo')+'"','ramo', a.no);
+    mandarPor(t, e);
+  }
+  sim.aguardando=null;
+  desenharSimulacao();
+  atualizarBarraSimAp();
+  atualizarLegendaSim();
+}
+
+/* o desenho da simulação atualiza a legenda junto */
+function desenharSimulacao(){
+  if(sim.palco==='apresentar'){
+    desenharSimNaApresentacao();
+    atualizarLegendaSim();
+  }
+  else { render(); }
+  atualizarPainelSim();
+}
+
+/* =========================================================================
+   9) O ARRASTE MANUAL DESLIGA O ACOMPANHAMENTO
+   Se a pessoa move a tela, ela assume o controle — sem briga com a câmera.
+   ========================================================================= */
+let ligarGestosCamera=null;
+(function(){
+  function ligar(){
+    const stage=$('#apStage');
+    if(!stage || stage.dataset.v30) return;
+    stage.dataset.v30='1';
+    stage.addEventListener('mousedown', ()=>{
+      if(sim.ativa && sim.palco==='apresentar' && cam.seguir){
+        cam.seguir=false;
+        if(cam.raf){ cancelAnimationFrame(cam.raf); cam.raf=null; cam.animando=false; }
+        atualizarBarraSimAp();
+        toast('Acompanhamento desligado — use ◎ para religar');
+      }
+    }, true);
+    stage.addEventListener('wheel', ()=>{
+      if(sim.ativa && sim.palco==='apresentar' && cam.seguir){
+        cam.seguir=false;
+        atualizarBarraSimAp();
+      }
+    }, {passive:true, capture:true});
+  }
+  ligarGestosCamera=ligar;
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(ligar,400));
+  else setTimeout(ligar,400);
+})();
+
+/* =========================================================================
+   10) TECLADO
+   ========================================================================= */
+(function(){
+  document.addEventListener('keydown', e=>{
+    if(!sim.ativa || sim.palco!=='apresentar') return;
+    if(sim.aguardando) return;                  /* a decisão tem as próprias teclas */
+    const k=String(e.key||'').toLowerCase();
+    if(k==='a'){ e.preventDefault(); alternarSeguir(); }
+    else if(k==='z'){ e.preventDefault(); trocarNivelCamera(); }
+  }, true);
+})();
+
+/* =========================================================================
+   11) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  /* ---- bússola ---- */
+  #apBussola{position:absolute;right:16px;bottom:70px;z-index:213;display:none;
+    background:rgba(17,19,23,.86);backdrop-filter:blur(8px);border-radius:10px;
+    padding:8px;border:1px solid rgba(255,255,255,.12);
+    box-shadow:0 6px 22px rgba(0,0,0,.4);line-height:0;
+    transition:opacity .2s}
+  #apBussola.show{display:block}
+  #apBussola svg{display:block;border-radius:5px}
+  /* ---- legenda da etapa ---- */
+  #apSimLegenda{position:absolute;left:50%;bottom:88px;transform:translateX(-50%);
+    z-index:213;display:none;max-width:min(760px,86%)}
+  #apSimLegenda.show{display:block;animation:aslEntra .26s ease}
+  @keyframes aslEntra{from{opacity:0;transform:translateX(-50%) translateY(8px)}
+                      to{opacity:1;transform:translateX(-50%) translateY(0)}}
+  .asl-cx{display:flex;align-items:center;gap:11px;flex-wrap:wrap;justify-content:center;
+    background:rgba(17,19,23,.92);backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:11px 18px;
+    box-shadow:0 8px 28px rgba(0,0,0,.45)}
+  .asl-cx b{color:#fff;font-size:16px;font-weight:800;letter-spacing:.1px}
+  .asl-tipo{font-size:9.5px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;
+    color:#0B0D12;background:#E0B978;border-radius:20px;padding:3px 10px}
+  .asl-quem{font-size:12px;color:#CBDACF;font-weight:600}
+  .asl-quem::before{content:'· '}
+  .asl-sis,.asl-tempo{font-size:11px;color:#9BA6C4;font-weight:700}
+  /* ---- botões de câmera na barra ---- */
+  #apSimBar button#asbSeguir{min-width:118px}
+  #apSimBar button#asbSeguir.on{background:rgba(192,138,62,.34);
+    border-color:rgba(192,138,62,.6);color:#FFE7BE}
+  #apSimBar button#asbZoom{min-width:62px;font-size:11px}
+  @media(max-width:900px){
+    #apSimBar button#asbSeguir{min-width:auto;font-size:0;padding:4px 9px}
+    #apSimBar button#asbSeguir::after{content:'◎';font-size:12.5px}
+    #apBussola{display:none!important}
+  }`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   12) ARRANQUE
+   ========================================================================= */
+(function(){
+  function arrancar(){
+    try{ montarBarraSimAp(); montarLegendaSim(); montarBussola(); }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,420));
+  else setTimeout(arrancar,420);
+})();
+
+</script>
 </body></html>
