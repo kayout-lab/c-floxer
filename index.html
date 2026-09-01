@@ -1375,6 +1375,7 @@ table.grid select{font-size:11px}
     <span class="apsep"></span>
     <button id="apPonteiro" title="Ponteiro laser (P)">◉ Laser</button>
     <button id="apLapis" title="Lápis — rabiscar sobre o fluxo (L)">✎ Lápis</button>
+    <button id="apSimular" title="Simular o fluxo — a bolinha percorre o processo (S)">◉ Simular</button>
     <button id="apFoco" title="Escurecer o resto do diagrama (F)">◐ Foco</button>
     <button id="apBlackout" title="Tela preta (B)">⬛</button>
     <span class="apsep"></span>
@@ -2526,6 +2527,7 @@ function render(){
   s+= (typeof propostasSVG==='function'? propostasSVG() : '');
   s+= (typeof bloqueiosSVG==='function'? bloqueiosSVG() : '');
   s+= (typeof cursoresSVG==='function'? cursoresSVG() : '');
+  s+= (typeof tokensSVG==='function'? tokensSVG() : '');
 
   /* guias de alinhamento */
   if(guias){
@@ -2593,6 +2595,7 @@ function buildStandaloneSVG(m, opts){
             + porCamada(m.nodes.filter(n=>n.type!=='group')).map(nodeSVG).join('')
             + porCamada(m.nodes.filter(n=>n.type==='group')).map(nodeSVG).join('');
   model=_model; selection=_sel; exportando=false;
+  /* a simulação é um estado de tela: nunca entra no arquivo exportado */
   let head='';
   if(opts.header){
     head=`<rect x="0" y="0" width="${W}" height="46" fill="${PRETO}"/>`
@@ -5842,6 +5845,9 @@ function abrirApresentacao(passoAPasso){
   try{ if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen(); }catch(e){}
 }
 function fecharApresentacao(){
+  if(typeof sim!=='undefined' && sim.ativa && sim.palco==='apresentar'){
+    try{ fecharSimulacao(); }catch(e){}
+  }
   ap.ativo=false;
   pararCrono();
   $('#apresentacao').classList.remove('show');
@@ -6162,6 +6168,12 @@ function initApresentacao(){
   $('#apBlackout').onclick=alternarBlackout;
   $('#apPonteiro').onclick=alternarLaser;
   $('#apLapis').onclick=alternarLapis;
+  const bsim=$('#apSimular');
+  if(bsim) bsim.onclick=()=>{
+    if(typeof sim!=='undefined' && sim.ativa) fecharSimulacao();
+    else if(typeof simularNaApresentacao==='function') simularNaApresentacao();
+    if(typeof atualizarBarraSimAp==='function') atualizarBarraSimAp();
+  };
   $('#apLapisLimpar').onclick=limparTracos;
   $('#apLapisUndo').onclick=desfazerTraco;
   $$('#apLapisBar [data-cor]').forEach(b=>b.onclick=()=>{
@@ -6261,6 +6273,10 @@ function initApresentacao(){
     else if(k.toLowerCase()==='v'){ e.preventDefault(); visaoGeralAp(); }
     else if(k.toLowerCase()==='p'){ e.preventDefault(); alternarLaser(); }
     else if(k.toLowerCase()==='l'){ e.preventDefault(); alternarLapis(); }
+    else if(k.toLowerCase()==='s'&&!e.ctrlKey&&!e.metaKey){ e.preventDefault();
+      if(typeof sim!=='undefined' && sim.ativa) fecharSimulacao();
+      else if(typeof simularNaApresentacao==='function') simularNaApresentacao();
+      if(typeof atualizarBarraSimAp==='function') atualizarBarraSimAp(); }
     else if(k.toLowerCase()==='x'){ e.preventDefault(); limparTracos(); }
     else if(k.toLowerCase()==='z'&&(e.ctrlKey||e.metaKey)){ e.preventDefault(); desfazerTraco(); }
     else if(k.toLowerCase()==='m'){ e.preventDefault(); alternarRoteiro(); }
@@ -15080,6 +15096,2389 @@ function baixarServidorProprio(){
     font-family:Consolas,monospace;font-size:11.5px;color:var(--musgo-8)}
   `;
   const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+</script>
+<script>
+/* =========================================================================
+   C-Floxer v28 — SIMULAÇÃO VISUAL POR TOKENS
+   Uma bolinha percorre o fluxo mostrando como ele executa de verdade.
+   Respeita a semântica BPMN: XOR escolhe um caminho, AND divide e
+   sincroniza, OR abre os que atendem à condição.
+   ========================================================================= */
+
+const SIM_VEL = [
+  {id:'lenta',  nome:'Lenta',   ms:1600, rot:'0,5×'},
+  {id:'normal', nome:'Normal',  ms:900,  rot:'1×'},
+  {id:'rapida', nome:'Rápida',  ms:450,  rot:'2×'},
+  {id:'turbo',  nome:'Muito rápida', ms:200, rot:'4×'}
+];
+
+/* estado da simulação */
+let sim = {
+  ativa:false, rodando:false, palco:'modelar',   /* modelar | apresentar */
+  tokens:[], proxId:1, velocidade:'normal',
+  timer:null, t0:0, passos:0, ciclos:0,
+  historico:[], trilha:{},          /* elementoId -> nº de passagens */
+  aguardando:null,                  /* decisão esperando escolha do usuário */
+  autoDecidir:true,                 /* escolhe sozinho nas decisões */
+  concluidos:0, limitePassos:400,
+  aoTerminar:null
+};
+
+function velocidadeMs(){
+  const v=SIM_VEL.find(x=>x.id===sim.velocidade);
+  return v?v.ms:900;
+}
+
+/* =========================================================================
+   1) LEITURA DO FLUXO — quem vem antes, quem vem depois
+   ========================================================================= */
+function ehNoDeFluxo(n){
+  return n && T[n.type] && (T[n.type].fam||'bpmn')==='bpmn'
+    && ['event','activity','gateway'].includes(T[n.type].cat);
+}
+function saidasSim(id){
+  return model.edges.filter(e=>e.source===id && e.type!=='association')
+    .map(e=>({e, n:nodeById(e.target)})).filter(o=>o.n && ehNoDeFluxo(o.n));
+}
+function entradasSim(id){
+  return model.edges.filter(e=>e.target===id && e.type!=='association')
+    .map(e=>({e, n:nodeById(e.source)})).filter(o=>o.n && ehNoDeFluxo(o.n));
+}
+/* onde o processo começa */
+function iniciosDoFluxo(){
+  const fluxo=model.nodes.filter(ehNoDeFluxo);
+  const starts=fluxo.filter(n=>n.type.startsWith('start'));
+  if(starts.length) return starts;
+  /* sem evento de início: quem não recebe fluxo */
+  const semEntrada=fluxo.filter(n=>!entradasSim(n.id).length);
+  if(semEntrada.length) return semEntrada;
+  return fluxo.length?[fluxo[0]]:[];
+}
+
+/* =========================================================================
+   2) O TOKEN — uma instância do processo percorrendo o desenho
+   ========================================================================= */
+function novoToken(no, cor){
+  return {
+    id:'tk'+(sim.proxId++),
+    no:no.id,                 /* onde está agora */
+    edge:null,                /* seta que está percorrendo */
+    prog:0,                   /* 0..1 dentro da seta */
+    cor:cor||'#C08A3E',
+    vivo:true, esperando:false,
+    caminho:[no.id],
+    nasceu:Date.now()
+  };
+}
+/* cor por tipo de caminho, para distinguir ramos paralelos */
+const CORES_TOKEN=['#C08A3E','#2C6E9E','#2F855A','#8E3061','#5B4B9E','#B7791F'];
+function corDoRamo(i){ return CORES_TOKEN[i % CORES_TOKEN.length]; }
+
+/* =========================================================================
+   3) O PASSO — a regra de execução, uma decisão de cada vez
+   ========================================================================= */
+function passoSimulacao(){
+  if(!sim.ativa || sim.travada) return;
+  if(sim.passos >= sim.limitePassos){
+    /* trava de uma vez: sem isto, cada chamada seguinte continuaria contando */
+    sim.travada=true;
+    pausarSimulacao();
+    toast('A simulação passou de '+sim.limitePassos+' passos — pode haver um laço sem fim','err');
+    registrarHistorico('⚠ Interrompida: possível laço infinito','err');
+    return;
+  }
+  sim.passos++;
+
+  /* 1) tokens em trânsito avançam pela seta */
+  let moveu=false;
+  sim.tokens.filter(t=>t.vivo && t.edge).forEach(t=>{
+    t.prog += 1;                      /* cada passo completa uma seta */
+    if(t.prog>=1){
+      const e=edgeById(t.edge);
+      const destino=e?nodeById(e.target):null;
+      t.edge=null; t.prog=0;
+      if(destino){
+        t.no=destino.id;
+        t.caminho.push(destino.id);
+        sim.trilha[destino.id]=(sim.trilha[destino.id]||0)+1;
+        registrarHistorico('→ '+(destino.name||T[destino.type].label), 'passo', destino.id);
+      } else { t.vivo=false; }
+    }
+    moveu=true;
+  });
+  if(moveu){ desenharSimulacao(); return; }
+
+  /* 2) tokens parados decidem para onde ir */
+  const parados=sim.tokens.filter(t=>t.vivo && !t.edge && !t.esperando);
+  if(!parados.length){
+    /* ninguém para mover: ou acabou, ou está tudo esperando junção */
+    const esperando=sim.tokens.filter(t=>t.vivo && t.esperando);
+    if(esperando.length){
+      /* tenta destravar junções */
+      if(!tentarSincronizar()){
+        pausarSimulacao();
+        registrarHistorico('⚠ Fluxo travado: há caminhos aguardando sincronização que nunca chega','err');
+        toast('Fluxo travado — um paralelo abriu caminhos que não se reencontram','err');
+      }
+      return;
+    }
+    encerrarSimulacao();
+    return;
+  }
+
+  parados.forEach(t=>{
+    const n=nodeById(t.no);
+    if(!n){ t.vivo=false; return; }
+
+    /* evento de fim: o token completa o percurso */
+    if(n.type.startsWith('end')){
+      t.vivo=false; sim.concluidos++;
+      registrarHistorico('✓ Concluído em "'+(n.name||'Fim')+'"','fim', n.id);
+      if(n.type==='endTerminate'){
+        sim.tokens.forEach(x=>{ if(x!==t) x.vivo=false; });
+        registrarHistorico('⛔ Encerramento total: todos os caminhos foram interrompidos','err', n.id);
+      }
+      return;
+    }
+
+    const outs=saidasSim(t.no);
+    if(!outs.length){
+      t.vivo=false;
+      registrarHistorico('⚠ "'+(n.name||T[n.type].label)+'" não tem saída — o caminho morre aqui','err', n.id);
+      return;
+    }
+
+    const cat=T[n.type].cat;
+
+    /* --- gateway paralelo: divide em todos os caminhos --- */
+    if(n.type==='parallelGateway' && outs.length>1){
+      registrarHistorico('⑂ Paralelo: '+outs.length+' caminhos ao mesmo tempo','ramo', n.id);
+      outs.forEach((o,i)=>{
+        if(i===0){ mandarPor(t, o.e); }
+        else {
+          const novo=novoToken(n, corDoRamo(sim.tokens.length+i));
+          novo.caminho=t.caminho.slice();
+          sim.tokens.push(novo);
+          mandarPor(novo, o.e);
+        }
+      });
+      return;
+    }
+
+    /* --- gateway inclusivo: abre os que atendem --- */
+    if(n.type==='inclusiveGateway' && outs.length>1){
+      const escolhidos = sim.autoDecidir
+        ? outs.filter((o,i)=>i===0 || Math.random()>0.45)
+        : outs;
+      registrarHistorico('◇ Inclusivo: '+escolhidos.length+' de '+outs.length+' caminhos','ramo', n.id);
+      escolhidos.forEach((o,i)=>{
+        if(i===0) mandarPor(t, o.e);
+        else {
+          const novo=novoToken(n, corDoRamo(sim.tokens.length+i));
+          novo.caminho=t.caminho.slice();
+          sim.tokens.push(novo);
+          mandarPor(novo, o.e);
+        }
+      });
+      return;
+    }
+
+    /* --- decisão exclusiva: escolhe UM caminho --- */
+    if(cat==='gateway' && outs.length>1){
+      if(!sim.autoDecidir){
+        /* pergunta ao usuário qual caminho seguir */
+        sim.aguardando={token:t.id, no:n.id, opcoes:outs.map(o=>({
+          edge:o.e.id, rotulo:o.e.name||'(sem rótulo)', destino:o.n.name||T[o.n.type].label
+        }))};
+        t.esperando=true;
+        pausarSimulacao(true);
+        desenharSimulacao();
+        montarPerguntaDecisao();
+        return;
+      }
+      /* automático: prefere o fluxo padrão, senão sorteia */
+      const padrao=outs.find(o=>o.e.type==='defaultFlow');
+      const esc = padrao && Math.random()>0.6 ? padrao : outs[Math.floor(Math.random()*outs.length)];
+      registrarHistorico('◆ Decisão: seguiu "'+(esc.e.name||'sem rótulo')+'"','ramo', n.id);
+      mandarPor(t, esc.e);
+      return;
+    }
+
+    /* --- junção paralela: espera os outros --- */
+    if(n.type==='parallelGateway' && entradasSim(t.no).length>1){
+      t.esperando=true;
+      registrarHistorico('⑃ Aguardando sincronização em "'+(n.name||'Paralelo')+'"','espera', n.id);
+      tentarSincronizar();
+      return;
+    }
+
+    /* --- caso comum: segue pela única saída --- */
+    mandarPor(t, outs[0].e);
+  });
+
+  desenharSimulacao();
+}
+
+function mandarPor(t, e){
+  t.edge=e.id; t.prog=0; t.esperando=false;
+}
+
+/* junção: quando todos os ramos chegaram, um único token segue */
+function tentarSincronizar(){
+  let destravou=false;
+  const porNo={};
+  sim.tokens.filter(t=>t.vivo && t.esperando).forEach(t=>{
+    (porNo[t.no]=porNo[t.no]||[]).push(t);
+  });
+  Object.keys(porNo).forEach(id=>{
+    const n=nodeById(id); if(!n) return;
+    const precisa=entradasSim(id).length;
+    const chegaram=porNo[id].length;
+    if(chegaram>=precisa && precisa>1){
+      /* funde os tokens num só */
+      const sobrevivente=porNo[id][0];
+      porNo[id].slice(1).forEach(x=>{ x.vivo=false; });
+      sobrevivente.esperando=false;
+      registrarHistorico('⑃ Sincronizado: '+chegaram+' caminhos viraram um','ramo', id);
+      destravou=true;
+    }
+  });
+  return destravou;
+}
+
+/* =========================================================================
+   4) DESENHO — a bolinha e a trilha percorrida
+   ========================================================================= */
+function posicaoToken(t){
+  if(t.edge){
+    const e=edgeById(t.edge);
+    if(!e) return null;
+    const pts=routeEdge(e);
+    if(!pts) return null;
+    return pontoEm(pts, Math.max(0,Math.min(1,t.prog)));
+  }
+  const n=nodeById(t.no);
+  if(!n) return null;
+  return {x:n.x+n.w/2, y:n.y+n.h/2};
+}
+
+function tokensSVG(){
+  if(!sim.ativa) return '';
+  let s='<g class="sim-camada" style="pointer-events:none">';
+
+  /* trilha: o que já foi percorrido ganha destaque suave */
+  Object.keys(sim.trilha).forEach(id=>{
+    const n=nodeById(id);
+    if(!n) return;
+    const intensidade=Math.min(0.32, 0.10+sim.trilha[id]*0.07);
+    s+=`<rect x="${n.x-5}" y="${n.y-5}" width="${n.w+10}" height="${n.h+10}" rx="10"
+         fill="#C08A3E" opacity="${intensidade.toFixed(2)}"/>`;
+  });
+
+  /* setas já percorridas */
+  const usadas={};
+  sim.tokens.forEach(t=>{
+    for(let i=0;i<t.caminho.length-1;i++){
+      const e=model.edges.find(x=>x.source===t.caminho[i] && x.target===t.caminho[i+1]);
+      if(e) usadas[e.id]=t.cor;
+    }
+  });
+  Object.keys(usadas).forEach(id=>{
+    const e=edgeById(id); if(!e) return;
+    const pts=routeEdge(e); if(!pts) return;
+    s+=`<path d="${ptsToRounded(pts,9)}" fill="none" stroke="${usadas[id]}"
+         stroke-width="4" opacity=".28" stroke-linecap="round"/>`;
+  });
+
+  /* elemento onde cada token está parado — pulsando */
+  sim.tokens.filter(t=>t.vivo && !t.edge).forEach(t=>{
+    const n=nodeById(t.no); if(!n) return;
+    s+=`<rect x="${n.x-8}" y="${n.y-8}" width="${n.w+16}" height="${n.h+16}" rx="11"
+         fill="none" stroke="${t.cor}" stroke-width="3">
+         <animate attributeName="stroke-opacity" values="1;.3;1" dur="1.2s" repeatCount="indefinite"/>
+       </rect>`;
+    if(t.esperando){
+      s+=`<text x="${n.x+n.w/2}" y="${n.y-16}" text-anchor="middle" font-size="10"
+           font-weight="800" fill="${t.cor}">⏸ aguardando</text>`;
+    }
+  });
+
+  /* as bolinhas */
+  sim.tokens.filter(t=>t.vivo).forEach(t=>{
+    const p=posicaoToken(t);
+    if(!p) return;
+    /* halo + anel branco: a bolinha precisa se destacar em telão e sobre qualquer forma */
+    s+=`<circle cx="${p.x}" cy="${p.y}" r="21" fill="${t.cor}" opacity=".14"/>`;
+    s+=`<circle cx="${p.x}" cy="${p.y}" r="14" fill="#fff" opacity=".92"/>`;
+    s+=`<circle cx="${p.x}" cy="${p.y}" r="11.5" fill="${t.cor}" stroke="#fff" stroke-width="2.6">
+         <animate attributeName="r" values="11.5;13;11.5" dur="1.4s" repeatCount="indefinite"/>
+       </circle>`;
+    if(sim.tokens.filter(x=>x.vivo).length>1){
+      s+=`<text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="middle"
+           font-size="9.5" font-weight="800" fill="#fff">${t.id.replace('tk','')}</text>`;
+    }
+  });
+
+  s+='</g>';
+  return s;
+}
+
+/* redesenha conforme o palco em que a simulação roda */
+function desenharSimulacao(){
+  if(sim.palco==='apresentar'){ desenharSimNaApresentacao(); }
+  else { render(); }
+  atualizarPainelSim();
+}
+
+/* na apresentação, os tokens entram como camada no SVG já montado */
+function desenharSimNaApresentacao(){
+  const stage=$('#apStage'); if(!stage) return;
+  const svg=stage.querySelector('svg'); if(!svg) return;
+  let g=svg.querySelector('#simCamadaAp');
+  if(!g){
+    const NS='http://www.w3.org/2000/svg';
+    g=document.createElementNS(NS,'g');
+    g.setAttribute('id','simCamadaAp');
+    g.setAttribute('style','pointer-events:none');
+    svg.appendChild(g);
+  }
+  /* a apresentação desloca o conteúdo; a camada acompanha */
+  const dx=(ap.pad||50)-((ap.base&&ap.base.x)||0);
+  const dy=(ap.pad||50)-((ap.base&&ap.base.y)||0);
+  g.setAttribute('transform',`translate(${dx},${dy})`);
+  g.innerHTML=tokensSVG().replace(/^<g[^>]*>/,'').replace(/<\/g>$/,'');
+}
+function limparSimNaApresentacao(){
+  const stage=$('#apStage'); if(!stage) return;
+  const svg=stage.querySelector('svg'); if(!svg) return;
+  const g=svg.querySelector('#simCamadaAp');
+  if(g && g.remove) g.remove();
+}
+
+/* =========================================================================
+   5) CONTROLE — iniciar, pausar, avançar, encerrar
+   ========================================================================= */
+function iniciarSimulacao(palco){
+  const inicios=iniciosDoFluxo();
+  if(!inicios.length){
+    toast('Não há fluxo para simular — desenhe ao menos um início e uma atividade','err');
+    return false;
+  }
+  const problemas=validar(model).filter(v=>v.k==='err');
+  sim.palco=palco||'modelar';
+  sim.ativa=true; sim.rodando=false;
+  sim.tokens=[]; sim.proxId=1; sim.passos=0; sim.concluidos=0;
+  sim.trilha={}; sim.historico=[]; sim.aguardando=null;
+  sim.travada=false;
+  sim.t0=Date.now();
+
+  inicios.forEach((n,i)=>{
+    const t=novoToken(n, corDoRamo(i));
+    sim.tokens.push(t);
+    sim.trilha[n.id]=1;
+  });
+  registrarHistorico('▶ Simulação iniciada em "'+(inicios[0].name||'Início')+'"','inicio', inicios[0].id);
+  if(problemas.length){
+    registrarHistorico('⚠ O desenho tem '+problemas.length+' erro(s) de notação — a simulação pode travar','err');
+  }
+
+  montarPainelSim();
+  desenharSimulacao();
+  if(sim.palco==='modelar') fit();
+  toast('Simulação pronta — use ▶ para executar ou ⇥ para avançar passo a passo','ok');
+  return true;
+}
+
+function rodarSimulacao(){
+  if(!sim.ativa) { if(!iniciarSimulacao(sim.palco)) return; }
+  if(sim.rodando) return;
+  sim.rodando=true;
+  const tick=()=>{
+    if(!sim.rodando || !sim.ativa) return;
+    passoSimulacao();
+    if(sim.rodando) sim.timer=setTimeout(tick, velocidadeMs());
+  };
+  tick();
+  atualizarPainelSim();
+}
+function pausarSimulacao(silencioso){
+  sim.rodando=false;
+  if(sim.timer){ clearTimeout(sim.timer); sim.timer=null; }
+  atualizarPainelSim();
+  if(!silencioso && sim.ativa) desenharSimulacao();
+}
+function avancarSimulacao(){
+  if(!sim.ativa){ iniciarSimulacao(sim.palco); return; }
+  pausarSimulacao(true);
+  passoSimulacao();
+}
+function reiniciarSimulacao(){
+  const p=sim.palco;
+  encerrarSimulacao(true);
+  iniciarSimulacao(p);
+}
+function encerrarSimulacao(silencioso){
+  const houve=sim.ativa;
+  const tempo=((Date.now()-sim.t0)/1000).toFixed(1);
+  const conc=sim.concluidos;
+  pausarSimulacao(true);
+  if(!silencioso && houve && conc){
+    registrarHistorico('■ Fim: '+conc+' caminho(s) concluído(s) em '+sim.passos+' passos','fim');
+    atualizarPainelSim();
+    toast(`Simulação concluída — ${conc} caminho(s) percorrido(s) em ${sim.passos} passos`,'ok');
+    return;
+  }
+  if(silencioso===true){
+    sim.ativa=false; sim.tokens=[]; sim.trilha={}; sim.historico=[];
+  }
+}
+function fecharSimulacao(){
+  sim.ativa=false; sim.rodando=false;
+  if(sim.timer){ clearTimeout(sim.timer); sim.timer=null; }
+  sim.tokens=[]; sim.trilha={}; sim.aguardando=null;
+  const p=$('#simPainel'); if(p) p.classList.remove('show');
+  const b=$('#tbSimular'); if(b) b.classList.remove('on');
+  limparSimNaApresentacao();
+  render();
+}
+
+function registrarHistorico(txt, tipo, alvo){
+  sim.historico.push({txt, tipo:tipo||'passo', alvo:alvo||'', quando:Date.now()});
+  if(sim.historico.length>200) sim.historico.shift();
+}
+
+/* =========================================================================
+   6) DECISÃO MANUAL — o usuário escolhe o caminho
+   ========================================================================= */
+function montarPerguntaDecisao(){
+  const a=sim.aguardando; if(!a) return;
+  const n=nodeById(a.no);
+  abrirModal('◆ '+esc(n?n.name||'Decisão':'Decisão'),
+    `<p style="margin-top:0;font-size:13px">Qual caminho o processo segue neste ponto?</p>
+     <div class="sim-opcoes">
+       ${a.opcoes.map((o,i)=>`
+         <button class="sim-op" data-simop="${o.edge}">
+           <span class="sim-op-rot">${esc(o.rotulo)}</span>
+           <span class="sim-op-dest">→ ${esc(o.destino)}</span>
+         </button>`).join('')}
+     </div>
+     <div class="dica-inline" style="margin-top:12px">
+       Marque <b>decidir automaticamente</b> no painel para o C-Floxer sortear os caminhos
+       e você observar o comportamento geral do fluxo.
+     </div>`,
+    `<button class="btn" id="simCancelaDec">Encerrar simulação</button>`);
+  $$('#modal [data-simop]').forEach(b=>b.onclick=()=>{
+    const e=edgeById(b.dataset.simop);
+    const t=sim.tokens.find(x=>x.id===a.token);
+    fecharModal();
+    if(t && e){
+      t.esperando=false;
+      registrarHistorico('◆ Você escolheu "'+(e.name||'sem rótulo')+'"','ramo', a.no);
+      mandarPor(t, e);
+    }
+    sim.aguardando=null;
+    desenharSimulacao();
+  });
+  const bc=$('#simCancelaDec');
+  if(bc) bc.onclick=()=>{ fecharModal(); fecharSimulacao(); };
+}
+
+/* =========================================================================
+   7) PAINEL DE CONTROLE
+   ========================================================================= */
+function montarPainelSim(){
+  if($('#simPainel')) { atualizarPainelSim(); return; }
+  const d=document.createElement('div');
+  d.id='simPainel'; d.className='sim-painel';
+  document.body.appendChild(d);
+  atualizarPainelSim();
+}
+function atualizarPainelSim(){
+  const p=$('#simPainel'); if(!p) return;
+  if(!sim.ativa){ p.classList.remove('show'); return; }
+  const vivos=sim.tokens.filter(t=>t.vivo).length;
+  const vel=SIM_VEL.find(v=>v.id===sim.velocidade)||SIM_VEL[1];
+  const ultimos=sim.historico.slice(-5).reverse();
+  p.innerHTML=`
+    <div class="sim-cab">
+      <span class="sim-pt ${sim.rodando?'rodando':''}"></span>
+      <b>Simulação</b>
+      <span class="sim-tag">${vivos} token(s)</span>
+      <button class="sim-x" id="simFechar" title="Encerrar simulação">✕</button>
+    </div>
+    <div class="sim-ctrl">
+      <button class="sim-b" id="simReiniciar" title="Recomeçar do início">⏮</button>
+      <button class="sim-b principal" id="simPlay" title="${sim.rodando?'Pausar':'Executar'}">${sim.rodando?'⏸':'▶'}</button>
+      <button class="sim-b" id="simPasso" title="Avançar um passo">⇥</button>
+      <span class="sim-sep"></span>
+      <button class="sim-b" id="simVel" title="Velocidade">${vel.rot}</button>
+    </div>
+    <div class="sim-kpi">
+      <div><b>${sim.passos}</b><span>passos</span></div>
+      <div><b>${sim.concluidos}</b><span>concluídos</span></div>
+      <div><b>${Object.keys(sim.trilha).length}</b><span>visitados</span></div>
+    </div>
+    <label class="sim-check">
+      <input type="checkbox" id="simAuto" ${sim.autoDecidir?'checked':''}>
+      decidir automaticamente nas bifurcações
+    </label>
+    <div class="sim-hist">
+      ${ultimos.map(h=>`<div class="sim-h ${h.tipo}">${esc(h.txt)}</div>`).join('')
+        ||'<div class="sim-h">aguardando…</div>'}
+    </div>
+    <div class="sim-rod">
+      <button class="sim-link" id="simRelatorio">📋 Ver relatório</button>
+    </div>`;
+  p.classList.add('show');
+  const g=(id)=>$('#'+id);
+  if(g('simFechar')) g('simFechar').onclick=fecharSimulacao;
+  if(g('simPlay')) g('simPlay').onclick=()=>{ sim.rodando?pausarSimulacao():rodarSimulacao(); };
+  if(g('simPasso')) g('simPasso').onclick=avancarSimulacao;
+  if(g('simReiniciar')) g('simReiniciar').onclick=reiniciarSimulacao;
+  if(g('simVel')) g('simVel').onclick=()=>{
+    const i=SIM_VEL.findIndex(v=>v.id===sim.velocidade);
+    sim.velocidade=SIM_VEL[(i+1)%SIM_VEL.length].id;
+    atualizarPainelSim();
+    toast('Velocidade: '+(SIM_VEL.find(v=>v.id===sim.velocidade)||{}).nome);
+  };
+  if(g('simAuto')) g('simAuto').onchange=e=>{ sim.autoDecidir=e.target.checked; };
+  if(g('simRelatorio')) g('simRelatorio').onclick=modalRelatorioSim;
+}
+
+/* =========================================================================
+   8) RELATÓRIO — o que a simulação revelou
+   ========================================================================= */
+function analisarSimulacao(){
+  const fluxo=model.nodes.filter(ehNoDeFluxo);
+  const naoVisitados=fluxo.filter(n=>!sim.trilha[n.id]);
+  const maisVisitados=Object.keys(sim.trilha)
+    .map(id=>({n:nodeById(id), q:sim.trilha[id]}))
+    .filter(o=>o.n).sort((a,b)=>b.q-a.q).slice(0,5);
+  const semFim=fluxo.filter(n=>!n.type.startsWith('end') && !saidasSim(n.id).length);
+  const paralelosAbertos=fluxo.filter(n=>n.type==='parallelGateway'
+    && saidasSim(n.id).length>1
+    && !fluxo.some(x=>x.type==='parallelGateway' && entradasSim(x.id).length>1));
+  return {naoVisitados, maisVisitados, semFim, paralelosAbertos};
+}
+function modalRelatorioSim(){
+  const a=analisarSimulacao();
+  const tempo=((Date.now()-sim.t0)/1000).toFixed(1);
+  abrirModal('📋 Relatório da simulação',
+    `<div class="doc kpi" style="border:0;box-shadow:none;padding:0;margin-bottom:14px">
+       <div><b>${sim.passos}</b><span>Passos executados</span></div>
+       <div><b>${sim.concluidos}</b><span>Caminhos concluídos</span></div>
+       <div><b>${Object.keys(sim.trilha).length}</b><span>Elementos visitados</span></div>
+       <div><b>${a.naoVisitados.length}</b><span>Nunca visitados</span></div>
+     </div>
+     ${a.naoVisitados.length?`
+       <h3 style="margin:14px 0 6px">Elementos que a simulação nunca alcançou</h3>
+       <p style="font-size:12.3px;color:var(--txt2);margin:0 0 8px">
+         Podem estar desconectados do fluxo, ou depender de uma condição que não ocorreu nesta execução.</p>
+       <div class="vlist">${a.naoVisitados.slice(0,10).map(n=>
+         `<div class="vitem warn" data-simir="${n.id}"><div class="dot"></div><div>
+            <b>${esc(n.name||T[n.type].label)}</b><span>${esc(T[n.type].label)}</span></div></div>`).join('')}</div>`
+     :`<div class="dica-inline" style="border-left-color:var(--ok)">
+         ✓ Todos os elementos do fluxo foram alcançados ao menos uma vez.</div>`}
+     ${a.semFim.length?`
+       <h3 style="margin:14px 0 6px">Caminhos que morrem sem encerramento</h3>
+       <div class="vlist">${a.semFim.map(n=>
+         `<div class="vitem err" data-simir="${n.id}"><div class="dot"></div><div>
+            <b>${esc(n.name||T[n.type].label)}</b><span>não tem saída nem é evento de fim</span></div></div>`).join('')}</div>`:''}
+     ${a.paralelosAbertos.length?`
+       <h3 style="margin:14px 0 6px">Paralelos sem sincronização</h3>
+       <div class="vlist">${a.paralelosAbertos.map(n=>
+         `<div class="vitem warn" data-simir="${n.id}"><div class="dot"></div><div>
+            <b>${esc(n.name||'Paralelo')}</b><span>abre caminhos que nunca se reencontram</span></div></div>`).join('')}</div>`:''}
+     ${a.maisVisitados.length?`
+       <h3 style="margin:14px 0 6px">Elementos mais percorridos</h3>
+       <table class="doc" style="border:0;padding:0;box-shadow:none">
+         <thead><tr><th>Elemento</th><th>Tipo</th><th style="text-align:center">Passagens</th></tr></thead>
+         <tbody>${a.maisVisitados.map(o=>
+           `<tr><td><b>${esc(o.n.name||T[o.n.type].label)}</b></td>
+             <td>${esc(T[o.n.type].label)}</td>
+             <td style="text-align:center"><b>${o.q}</b></td></tr>`).join('')}</tbody>
+       </table>`:''}
+     <h3 style="margin:14px 0 6px">Registro da execução</h3>
+     <div class="sim-log">${sim.historico.map(h=>
+       `<div class="sim-h ${h.tipo}">${esc(h.txt)}</div>`).join('')}</div>`,
+    `<button class="btn" id="simLogCsv">⤓ Baixar registro</button>
+     <button class="btn primary" onclick="fecharModal()">Fechar</button>`);
+  $$('#modal [data-simir]').forEach(el=>el.onclick=()=>{
+    const n=nodeById(el.dataset.simir);
+    if(!n) return;
+    fecharModal();
+    const host=$('#svgHost');
+    view.tx=host.clientWidth/2-(n.x+n.w/2)*view.k;
+    view.ty=host.clientHeight/2-(n.y+n.h/2)*view.k;
+    setSel(n.id); render(); renderProps();
+  });
+  const bc=$('#simLogCsv');
+  if(bc) bc.onclick=()=>{
+    const linhas=[['#','Momento','Evento']];
+    sim.historico.forEach((h,i)=>linhas.push([i+1, new Date(h.quando).toLocaleTimeString('pt-BR'), h.txt]));
+    const csv='\uFEFF'+linhas.map(l=>l.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+    baixar(nomeArq('csv').replace('.csv','_simulacao.csv'), csv, 'text/csv;charset=utf-8');
+    toast('Registro da simulação baixado','ok');
+  };
+}
+
+/* =========================================================================
+   9) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  .sim-painel{position:fixed;left:16px;bottom:16px;z-index:122;display:none;width:268px;
+    background:#fff;border:1px solid var(--line2);border-radius:13px;
+    box-shadow:0 12px 38px rgba(35,48,41,.22);overflow:hidden}
+  .sim-painel.show{display:block}
+  .sim-cab{display:flex;align-items:center;gap:7px;padding:10px 12px;background:var(--musgo-0);
+    border-bottom:1px solid var(--line)}
+  .sim-cab b{font-size:12.3px}
+  .sim-pt{width:8px;height:8px;border-radius:50%;background:var(--txt3);flex:0 0 8px}
+  .sim-pt.rodando{background:var(--sel);box-shadow:0 0 0 3px rgba(192,138,62,.22);
+    animation:simPulse 1s infinite}
+  @keyframes simPulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .sim-tag{margin-left:auto;font-size:10px;font-weight:800;color:var(--txt3)}
+  .sim-x{border:0;background:transparent;cursor:pointer;color:var(--txt3);font-weight:800;font-size:12px}
+  .sim-x:hover{color:var(--err)}
+  .sim-ctrl{display:flex;align-items:center;gap:4px;padding:9px 12px;border-bottom:1px solid var(--line)}
+  .sim-b{border:1px solid var(--line2);background:#fff;border-radius:8px;cursor:pointer;
+    padding:6px 11px;font-weight:800;font-size:12.5px;color:var(--txt2)}
+  .sim-b:hover{border-color:var(--acao);color:var(--acao)}
+  .sim-b.principal{background:var(--acao);border-color:var(--acao);color:#fff;flex:1}
+  .sim-b.principal:hover{background:var(--acao-h);color:#fff}
+  .sim-sep{width:1px;height:18px;background:var(--line);margin:0 2px}
+  .sim-kpi{display:flex;padding:9px 12px;gap:8px;border-bottom:1px solid var(--line)}
+  .sim-kpi div{flex:1;text-align:center}
+  .sim-kpi b{display:block;font-size:17px;color:var(--acao);line-height:1.15;font-variant-numeric:tabular-nums}
+  .sim-kpi span{font-size:8.6px;text-transform:uppercase;letter-spacing:.5px;color:var(--txt3);font-weight:800}
+  .sim-check{display:flex;align-items:center;gap:7px;padding:8px 12px;font-size:11.3px;
+    color:var(--txt2);cursor:pointer;border-bottom:1px solid var(--line)}
+  .sim-hist{padding:7px 12px;max-height:120px;overflow-y:auto;display:flex;flex-direction:column;gap:3px}
+  .sim-h{font-size:10.8px;color:var(--txt2);line-height:1.45;padding:2px 0}
+  .sim-h.inicio{color:var(--acao);font-weight:700}
+  .sim-h.ramo{color:var(--sel);font-weight:700}
+  .sim-h.fim{color:var(--ok);font-weight:700}
+  .sim-h.err{color:var(--err);font-weight:700}
+  .sim-h.espera{color:var(--warn)}
+  .sim-rod{padding:7px 12px;border-top:1px solid var(--line);text-align:center}
+  .sim-link{border:0;background:transparent;color:var(--acao);cursor:pointer;font-weight:800;font-size:11px}
+  .sim-link:hover{text-decoration:underline}
+  .sim-log{max-height:200px;overflow-y:auto;background:var(--musgo-0);border:1px solid var(--line);
+    border-radius:9px;padding:9px 11px;display:flex;flex-direction:column;gap:2px}
+  .sim-opcoes{display:flex;flex-direction:column;gap:7px;margin-top:10px}
+  .sim-op{border:1px solid var(--line2);background:#fff;border-radius:10px;padding:11px 13px;
+    cursor:pointer;text-align:left;display:flex;flex-direction:column;gap:3px}
+  .sim-op:hover{border-color:var(--sel);box-shadow:0 3px 12px rgba(192,138,62,.18)}
+  .sim-op-rot{font-size:13px;font-weight:800;color:var(--sel)}
+  .sim-op-dest{font-size:11.5px;color:var(--txt2)}
+  /* barra da simulação dentro da apresentação */
+  #apSimBar{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:212;
+    display:none;gap:4px;align-items:center;background:rgba(17,19,23,.92);backdrop-filter:blur(8px);
+    border-radius:10px;padding:6px 11px;border:1px solid rgba(255,255,255,.10);
+    box-shadow:0 6px 22px rgba(0,0,0,.4)}
+  #apSimBar.show{display:flex}
+  #apSimBar .asb-t{color:#fff;font-weight:800;font-size:11.5px;margin-right:4px}
+  #apSimBar button{background:transparent;border:1px solid rgba(255,255,255,.2);color:#fff;
+    border-radius:7px;padding:4px 10px;cursor:pointer;font-weight:700;font-size:11.5px}
+  #apSimBar button:hover{background:rgba(255,255,255,.16)}
+  #apSimBar .asb-i{color:#9BA6C4;font-size:10.5px;font-weight:700;margin-left:3px}`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   10) INTEGRAÇÃO COM O MODO APRESENTAÇÃO
+   ========================================================================= */
+function montarBarraSimAp(){
+  const palco=$('#apPalco'); if(!palco || $('#apSimBar')) return;
+  const d=document.createElement('div');
+  d.id='apSimBar';
+  d.innerHTML=`<span class="asb-t">▶ Simulação</span>
+    <button id="asbPlay">▶</button>
+    <button id="asbPasso">⇥</button>
+    <button id="asbReiniciar">⏮</button>
+    <span class="asb-i" id="asbInfo">—</span>
+    <button id="asbSair">✕</button>`;
+  palco.appendChild(d);
+  const g=id=>$('#'+id);
+  if(g('asbPlay')) g('asbPlay').onclick=()=>{ sim.rodando?pausarSimulacao():rodarSimulacao(); atualizarBarraSimAp(); };
+  if(g('asbPasso')) g('asbPasso').onclick=()=>{ avancarSimulacao(); atualizarBarraSimAp(); };
+  if(g('asbReiniciar')) g('asbReiniciar').onclick=()=>{ reiniciarSimulacao(); atualizarBarraSimAp(); };
+  if(g('asbSair')) g('asbSair').onclick=()=>{ fecharSimulacao(); atualizarBarraSimAp(); };
+}
+function atualizarBarraSimAp(){
+  const b=$('#apSimBar'); if(!b) return;
+  b.classList.toggle('show', sim.ativa && sim.palco==='apresentar');
+  const p=$('#asbPlay'); if(p) p.textContent=sim.rodando?'⏸':'▶';
+  const i=$('#asbInfo');
+  if(i) i.textContent=sim.ativa
+    ? `${sim.tokens.filter(t=>t.vivo).length} token(s) · ${sim.passos} passos` : '—';
+}
+function simularNaApresentacao(){
+  montarBarraSimAp();
+  if(iniciarSimulacao('apresentar')){
+    const p=$('#simPainel'); if(p) p.classList.remove('show');   /* na apresentação usa a barra */
+    atualizarBarraSimAp();
+  }
+}
+
+/* =========================================================================
+   11) ARRANQUE
+   ========================================================================= */
+function initSimulacao(){
+  /* botão na barra de ferramentas, ao lado de Validar */
+  const alvo=$('#tbApresentar');
+  if(alvo && alvo.parentNode && !$('#tbSimular')){
+    const b=document.createElement('button');
+    b.className='tbtn'; b.id='tbSimular';
+    b.title='Simular o fluxo — uma bolinha percorre o processo mostrando como ele executa (Alt+S)';
+    b.innerHTML='◉ Simular';
+    b.onclick=()=>{
+      if(sim.ativa && sim.palco==='modelar') fecharSimulacao();
+      else { iniciarSimulacao('modelar'); const x=$('#tbSimular'); if(x) x.classList.add('on'); }
+    };
+    alvo.parentNode.insertBefore(b, alvo);
+  }
+  montarBarraSimAp();
+  /* atalho */
+  document.addEventListener('keydown', e=>{
+    const digitando=['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName);
+    if(digitando) return;
+    if(e.altKey && (e.key==='s'||e.key==='S')){
+      e.preventDefault();
+      if(sim.ativa) fecharSimulacao();
+      else iniciarSimulacao(ap.ativo?'apresentar':'modelar');
+    }
+    /* na simulação: espaço executa/pausa, seta direita avança */
+    if(sim.ativa && !ap.ativo){
+      if(e.key==='ArrowRight' && e.shiftKey){ e.preventDefault(); avancarSimulacao(); }
+    }
+  });
+}
+
+</script>
+<script>
+/* =========================================================================
+   C-Floxer v28 — IMPORTAR DE FORA
+   Lista em XLSX/CSV · Visio (.vdx e .vsdx) · Lucidchart (.csv)
+   Com modelo de planilha para baixar e preencher.
+   ========================================================================= */
+
+/* =========================================================================
+   1) LEITOR DE CSV — respeita aspas, ponto e vírgula e vírgula
+   ========================================================================= */
+function detectarSeparador(txt){
+  const linha=String(txt).split(/\r?\n/).find(l=>l.trim());
+  if(!linha) return ';';
+  const cont=(c)=>(linha.match(new RegExp('\\'+c,'g'))||[]).length;
+  const pv=cont(';'), vg=cont(','), tab=(linha.match(/\t/g)||[]).length;
+  if(tab>=pv && tab>=vg) return '\t';
+  return pv>=vg ? ';' : ',';
+}
+function lerCSV(txt, sep){
+  sep=sep||detectarSeparador(txt);
+  const t=String(txt).replace(/^\uFEFF/,'');
+  const linhas=[]; let campo='', linha=[], aspas=false;
+  for(let i=0;i<t.length;i++){
+    const c=t[i], prox=t[i+1];
+    if(aspas){
+      if(c==='"' && prox==='"'){ campo+='"'; i++; }
+      else if(c==='"'){ aspas=false; }
+      else campo+=c;
+      continue;
+    }
+    if(c==='"'){ aspas=true; continue; }
+    if(c===sep){ linha.push(campo); campo=''; continue; }
+    if(c==='\r') continue;
+    if(c==='\n'){ linha.push(campo); linhas.push(linha); linha=[]; campo=''; continue; }
+    campo+=c;
+  }
+  if(campo!=='' || linha.length){ linha.push(campo); linhas.push(linha); }
+  return linhas.filter(l=>l.some(c=>String(c).trim()));
+}
+
+/* =========================================================================
+   2) LEITOR DE XLSX — descompacta o ZIP e lê a primeira planilha
+   O .xlsx é um ZIP com XML dentro. Aqui só se lê; nada é gravado.
+   ========================================================================= */
+/* inflate cru, para quando o navegador não oferecer DecompressionStream */
+function inflateCru(dados){
+  let pos=0, bit=0;
+  const ler1=()=>{ const v=(dados[pos]>>bit)&1; bit++; if(bit===8){bit=0;pos++;} return v; };
+  const lerN=(n)=>{ let v=0; for(let i=0;i<n;i++) v|=ler1()<<i; return v; };
+  const saida=[];
+  const COMP=[16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+  const LBASE=[3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+  const LEXT =[0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+  const DBASE=[1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+  const DEXT =[0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+  function montarArvore(comps){
+    const max=Math.max(...comps);
+    const contagem=new Array(max+1).fill(0);
+    comps.forEach(c=>{ if(c) contagem[c]++; });
+    const proximo=new Array(max+1).fill(0);
+    let cod=0;
+    for(let b=1;b<=max;b++){ cod=(cod+contagem[b-1])<<1; proximo[b]=cod; }
+    const mapa={};
+    comps.forEach((c,i)=>{ if(c){ mapa[c+'_'+proximo[c]]=i; proximo[c]++; } });
+    return {mapa, max};
+  }
+  function decodificar(arv){
+    let cod=0;
+    for(let b=1;b<=arv.max;b++){
+      cod=(cod<<1)|ler1();
+      const v=arv.mapa[b+'_'+cod];
+      if(v!==undefined) return v;
+    }
+    throw new Error('código Huffman inválido');
+  }
+  let fim=false;
+  while(!fim && pos<dados.length){
+    fim=ler1()===1;
+    const tipo=lerN(2);
+    if(tipo===0){
+      if(bit){ bit=0; pos++; }
+      const tam=dados[pos]|(dados[pos+1]<<8); pos+=4;
+      for(let i=0;i<tam;i++) saida.push(dados[pos++]);
+      continue;
+    }
+    let arvL, arvD;
+    if(tipo===1){
+      const cl=new Array(288);
+      for(let i=0;i<144;i++) cl[i]=8;
+      for(let i=144;i<256;i++) cl[i]=9;
+      for(let i=256;i<280;i++) cl[i]=7;
+      for(let i=280;i<288;i++) cl[i]=8;
+      arvL=montarArvore(cl);
+      arvD=montarArvore(new Array(30).fill(5));
+    } else if(tipo===2){
+      const hlit=lerN(5)+257, hdist=lerN(5)+1, hclen=lerN(4)+4;
+      const clen=new Array(19).fill(0);
+      for(let i=0;i<hclen;i++) clen[COMP[i]]=lerN(3);
+      const arvC=montarArvore(clen);
+      const comps=[];
+      while(comps.length < hlit+hdist){
+        const s=decodificar(arvC);
+        if(s<16) comps.push(s);
+        else if(s===16){ const r=3+lerN(2); const p=comps[comps.length-1]; for(let i=0;i<r;i++) comps.push(p); }
+        else if(s===17){ const r=3+lerN(3); for(let i=0;i<r;i++) comps.push(0); }
+        else { const r=11+lerN(7); for(let i=0;i<r;i++) comps.push(0); }
+      }
+      arvL=montarArvore(comps.slice(0,hlit));
+      arvD=montarArvore(comps.slice(hlit));
+    } else throw new Error('bloco comprimido inválido');
+    for(;;){
+      const s=decodificar(arvL);
+      if(s===256) break;
+      if(s<256){ saida.push(s); continue; }
+      const li=s-257;
+      const comp=LBASE[li]+lerN(LEXT[li]);
+      const di=decodificar(arvD);
+      const dist=DBASE[di]+lerN(DEXT[di]);
+      const ini=saida.length-dist;
+      for(let i=0;i<comp;i++) saida.push(saida[ini+i]);
+    }
+  }
+  return new Uint8Array(saida);
+}
+/* descompacta usando o navegador quando possível */
+async function descompactar(dados){
+  try{
+    if(typeof DecompressionStream!=='undefined'){
+      const ds=new DecompressionStream('deflate-raw');
+      const r=new Blob([dados]).stream().pipeThrough(ds);
+      const buf=await new Response(r).arrayBuffer();
+      return new Uint8Array(buf);
+    }
+  }catch(e){ /* cai para o inflate próprio */ }
+  return inflateCru(dados);
+}
+/* abre um ZIP e devolve os arquivos pedidos */
+async function abrirZip(buffer, filtro){
+  const d=new Uint8Array(buffer);
+  const dv=new DataView(buffer);
+  const arquivos={};
+  /* percorre os cabeçalhos locais */
+  let i=0;
+  while(i < d.length-4){
+    const assinatura=dv.getUint32(i, true);
+    if(assinatura!==0x04034b50) break;
+    const metodo=dv.getUint16(i+8, true);
+    const tamComp=dv.getUint32(i+18, true);
+    const tamOrig=dv.getUint32(i+22, true);
+    const tamNome=dv.getUint16(i+26, true);
+    const tamExtra=dv.getUint16(i+28, true);
+    const nome=new TextDecoder().decode(d.slice(i+30, i+30+tamNome));
+    const ini=i+30+tamNome+tamExtra;
+    if(!filtro || filtro(nome)){
+      const bruto=d.slice(ini, ini+tamComp);
+      try{
+        arquivos[nome] = metodo===0 ? bruto : await descompactar(bruto);
+      }catch(e){ /* arquivo ilegível: ignora */ }
+    }
+    i = ini + tamComp;
+    if(tamComp===0 && tamOrig===0) break;   /* descritor após os dados: para aqui */
+  }
+  return arquivos;
+}
+/* lê a primeira planilha de um .xlsx */
+async function lerXLSX(buffer){
+  const arqs=await abrirZip(buffer, n=>
+    n==='xl/sharedStrings.xml' || n==='xl/workbook.xml' || /^xl\/worksheets\/sheet\d+\.xml$/.test(n));
+  const txt=(u8)=>u8?new TextDecoder('utf-8').decode(u8):'';
+  /* textos compartilhados */
+  const compart=[];
+  const ssXml=txt(arqs['xl/sharedStrings.xml']);
+  if(ssXml){
+    const doc=new DOMParser().parseFromString(ssXml,'application/xml');
+    const sis=[...doc.getElementsByTagName('*')].filter(e=>e.localName==='si');
+    sis.forEach(si=>{
+      const ts=[...si.getElementsByTagName('*')].filter(e=>e.localName==='t');
+      compart.push(ts.map(t=>t.textContent).join(''));
+    });
+  }
+  /* primeira planilha disponível */
+  const chave=Object.keys(arqs).filter(n=>/worksheets\/sheet\d+\.xml$/.test(n)).sort()[0];
+  if(!chave) throw new Error('planilha não encontrada dentro do arquivo');
+  const doc=new DOMParser().parseFromString(txt(arqs[chave]),'application/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error('planilha ilegível');
+  const linhas=[];
+  const rows=[...doc.getElementsByTagName('*')].filter(e=>e.localName==='row');
+  rows.forEach(row=>{
+    const celulas=[];
+    [...row.getElementsByTagName('*')].filter(e=>e.localName==='c').forEach(c=>{
+      const ref=c.getAttribute('r')||'';
+      const col=(ref.match(/^[A-Z]+/)||['A'])[0];
+      let idx=0;
+      for(let k=0;k<col.length;k++) idx=idx*26+(col.charCodeAt(k)-64);
+      idx--;
+      const tipo=c.getAttribute('t');
+      const vEl=[...c.getElementsByTagName('*')].find(e=>e.localName==='v');
+      const isEl=[...c.getElementsByTagName('*')].filter(e=>e.localName==='t');
+      let valor='';
+      if(tipo==='s' && vEl) valor=compart[+vEl.textContent]||'';
+      else if(tipo==='inlineStr' && isEl.length) valor=isEl.map(t=>t.textContent).join('');
+      else if(vEl) valor=vEl.textContent;
+      celulas[idx]=valor;
+    });
+    for(let k=0;k<celulas.length;k++) if(celulas[k]===undefined) celulas[k]='';
+    if(celulas.some(x=>String(x).trim())) linhas.push(celulas);
+  });
+  return linhas;
+}
+
+/* =========================================================================
+   3) DE LISTA PARA DIAGRAMA — reconhecimento das colunas
+   ========================================================================= */
+const COLUNAS_ACEITAS = {
+  ordem:    ['#','n','no','nº','num','numero','número','ordem','id','item','seq','sequencia','sequência','linha','ordem de execução'],
+  nome:     ['atividade','etapa','tarefa','nome','name','descrição curta','acao','ação','task','step','step name','passo',
+             'título','titulo','processo','atividade/etapa','o que é feito','activity'],
+  tipo:     ['tipo','tipo bpmn','type','elemento','categoria','shape','forma'],
+  raia:     ['raia','executor','responsável','responsavel','área','area','quem','lane','swimlane','role','papel',
+             'setor','departamento','owner','ator','cargo','equipe','time','gerência','gerencia','raia / executor'],
+  sistema:  ['sistema','ferramenta','system','aplicação','aplicacao','app','plataforma','software'],
+  desc:     ['descrição','descricao','description','o que é feito','detalhe','detalhamento','observação','observacao','notes','nota'],
+  tempo:    ['tempo','tempo médio','tempo medio','duração','duracao','duration','sla','prazo','tempo de ciclo','lead time'],
+  volume:   ['volume','volume/mês','volume mes','volume mês','qtd','quantidade','frequência','frequencia','mês','mes','por mês'],
+  risco:    ['risco','ponto de atenção','atenção','atencao','risk','problema'],
+  next:     ['vai para','proximo','próximo','next','destino','segue para','sucessor','para','conecta'],
+  entradas: ['entrada','entradas','input','inputs','insumo'],
+  saidas:   ['saída','saida','saídas','saidas','output','outputs','produto'],
+  N:        ['automação','automacao','nível','nivel','maturidade','grau de automação','nivel de automacao','n|g|q']
+};
+/* descobre qual coluna é qual, pelo cabeçalho */
+function mapearColunas(cabecalho){
+  const mapa={};
+  const norm=s=>String(s||'').trim().toLowerCase()
+    .replace(/[àáâã]/g,'a').replace(/[éê]/g,'e').replace(/í/g,'i')
+    .replace(/[óôõ]/g,'o').replace(/ú/g,'u').replace(/ç/g,'c')
+    .replace(/\s+/g,' ');
+  /* cabeçalhos compostos são comuns: "Raia / Executor", "Tempo (médio)",
+     "Volume/mês". Cada parte é testada separadamente. */
+  const partes=h=>{
+    const v=norm(h);
+    const ps=[v].concat(v.split(/[\/\-–—,;()\[\]|]+/).map(x=>x.trim()));
+    return [...new Set(ps.filter(Boolean))];
+  };
+  cabecalho.forEach((h,i)=>{
+    const ps=partes(h);
+    if(!ps.length) return;
+    Object.keys(COLUNAS_ACEITAS).forEach(campo=>{
+      if(mapa[campo]!==undefined) return;
+      const aceitas=COLUNAS_ACEITAS[campo].map(norm);
+      if(ps.some(p=>aceitas.includes(p))) mapa[campo]=i;
+    });
+  });
+  mapa._reconhecidas=Object.keys(mapa).length;
+  /* Nada reconhecido: adota a ordem convencional do modelo. A primeira coluna
+     só é tratada como numeração quando de fato contém números — senão ela é
+     o próprio nome da etapa, e supor o contrário descartaria a coluna útil. */
+  if(mapa.nome===undefined){
+    const primeiraEhNumero = /^\s*\d+\s*$/.test(String(cabecalho[0]||''));
+    const ordemPadrao = primeiraEhNumero
+      ? ['ordem','nome','tipo','raia','sistema','desc','tempo','volume','N','risco','next']
+      : ['nome','raia','tipo','sistema','desc','tempo','volume','N','risco','next'];
+    ordemPadrao.forEach((c,i)=>{ if(mapa[c]===undefined && i<cabecalho.length) mapa[c]=i; });
+  }
+  return mapa;
+}
+/* traduz o texto do tipo para um elemento BPMN */
+const APELIDOS_TIPO = {
+  startEvent:['inicio','início','start','começo','comeco','gatilho','evento de inicio','evento de início','disparo'],
+  startMessage:['inicio mensagem','início mensagem','start message','chamado','recebimento'],
+  startTimer:['inicio temporal','início temporal','start timer','agendado','recorrente','prazo inicial'],
+  endEvent:['fim','end','encerramento','fim do processo','conclusao','conclusão','termino','término'],
+  endError:['fim erro','erro','end error','exceção','excecao','falha'],
+  endTerminate:['encerra tudo','terminate','fim total'],
+  userTask:['tarefa humana','humana','user task','manual com sistema','pessoa','usuario','usuário'],
+  manualTask:['tarefa manual','manual','manual task','papel','físico','fisico'],
+  serviceTask:['tarefa automatica','tarefa automática','automatica','automática','service task','robo','robô','rpa','automacao','automação','sistema faz'],
+  systemTask:['tarefa sistemica','tarefa sistêmica','sistemica','sistêmica','no sistema','lancamento','lançamento'],
+  scriptTask:['script','job','rotina','batch'],
+  businessRuleTask:['regra','regra de negocio','regra de negócio','business rule','politica','política'],
+  sendTask:['enviar','envio','send','comunicar','notificar'],
+  receiveTask:['receber','recebimento','receive','aguardar mensagem'],
+  subProcess:['subprocesso','sub-processo','sub processo','subprocess'],
+  callActivity:['processo externo','call activity','chamada'],
+  exclusiveGateway:['decisao','decisão','decision','xor','exclusivo','se','condicao','condição','gateway','escolha'],
+  parallelGateway:['paralelo','and','parallel','simultaneo','simultâneo','divide'],
+  inclusiveGateway:['inclusivo','or','inclusive'],
+  intermediateTimer:['espera','aguardo','prazo','timer','sla'],
+  intermediateMessage:['mensagem','message'],
+  task:['tarefa','atividade','task','acao','ação','etapa']
+};
+function traduzirTipo(txt, ehPrimeira, ehUltima, temPergunta){
+  const v=String(txt||'').trim().toLowerCase()
+    .replace(/[àáâã]/g,'a').replace(/[éê]/g,'e').replace(/í/g,'i')
+    .replace(/[óôõ]/g,'o').replace(/ú/g,'u').replace(/ç/g,'c');
+  if(v){
+    if(T[txt]) return txt;                       /* já veio no formato interno */
+    for(const tipo of Object.keys(APELIDOS_TIPO)){
+      if(APELIDOS_TIPO[tipo].some(a=>v===a || v.includes(a))) return tipo;
+    }
+  }
+  /* sem tipo declarado: deduz pela posição e pelo texto */
+  if(ehPrimeira) return 'startEvent';
+  if(ehUltima) return 'endEvent';
+  if(temPergunta) return 'exclusiveGateway';
+  return 'userTask';
+}
+/* converte as linhas em tabela da modelagem guiada */
+function listaParaTabela(linhas){
+  if(!linhas.length) throw new Error('arquivo vazio');
+  const cab=linhas[0];
+  const mapa=mapearColunas(cab);
+  /* A primeira linha só é descartada como cabeçalho quando os nomes das
+     colunas foram de fato reconhecidos. Sem isso, descartá-la perderia
+     a primeira etapa do processo. */
+  const pareceCabecalho = (mapa._reconhecidas||0) >= 2;
+  const dados = pareceCabecalho ? linhas.slice(1) : linhas;
+  if(!dados.length) throw new Error('o arquivo só tem cabeçalho');
+  const pega=(l,c)=>mapa[c]!==undefined ? String(l[mapa[c]]||'').trim() : '';
+  const tabela=[];
+  dados.forEach((l,i)=>{
+    const nome=pega(l,'nome');
+    const desc=pega(l,'desc');
+    if(!nome && !desc) return;
+    const ehPrimeira = tabela.length===0;
+    const ehUltima   = i===dados.length-1;
+    const temPergunta = /\?$/.test(nome.trim());
+    tabela.push({
+      nome: nome || desc.slice(0,60),
+      tipo: traduzirTipo(pega(l,'tipo'), ehPrimeira, ehUltima, temPergunta),
+      raia: pega(l,'raia'),
+      sistema: pega(l,'sistema'),
+      desc: desc,
+      tempo: pega(l,'tempo'),
+      volume: pega(l,'volume'),
+      risco: pega(l,'risco'),
+      N: normalizarN(pega(l,'N')),
+      next: pega(l,'next')
+    });
+  });
+  if(!tabela.length) throw new Error('nenhuma atividade reconhecida — confira se há uma coluna com o nome da etapa');
+  /* garante início e fim */
+  if(!tabela.some(r=>r.tipo.startsWith('start')))
+    tabela.unshift({nome:'Início do processo',tipo:'startEvent',raia:tabela[0].raia,sistema:'',desc:'',next:'',tempo:'',volume:'',risco:'',N:''});
+  if(!tabela.some(r=>r.tipo.startsWith('end')))
+    tabela.push({nome:'Fim do processo',tipo:'endEvent',raia:tabela[tabela.length-1].raia,sistema:'',desc:'',next:'',tempo:'',volume:'',risco:'',N:''});
+  return {tabela, mapa, cabecalho:cab, pareceCabecalho};
+}
+function normalizarN(v){
+  const s=String(v||'').trim().toUpperCase();
+  if(/^N[0-3]$/.test(s)) return s;
+  if(/^[0-3]$/.test(s)) return 'N'+s;
+  if(/manual/i.test(v)) return 'N0';
+  if(/apoio|parcial/i.test(v)) return 'N1';
+  if(/supervis/i.test(v)) return 'N2';
+  if(/plena|total|autom/i.test(v)) return 'N3';
+  return '';
+}
+
+/* =========================================================================
+   4) LEITOR DE VISIO — .vdx (XML) e .vsdx (ZIP com XML)
+   ========================================================================= */
+function lerVisioXML(xmlTxt){
+  const doc=new DOMParser().parseFromString(xmlTxt,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error('XML do Visio inválido');
+  const todos=[...doc.getElementsByTagName('*')];
+  const shapes=todos.filter(e=>e.localName==='Shape');
+  if(!shapes.length) throw new Error('nenhuma forma encontrada no arquivo do Visio');
+  const PX=96;
+  const nos=[], ligas=[];
+  const achar=(el,nome)=>{
+    const f=[...el.children].find(c=>c.localName===nome);
+    return f?f.textContent.trim():'';
+  };
+  const acharProfundo=(el,nome)=>{
+    const f=[...el.getElementsByTagName('*')].find(c=>c.localName===nome);
+    return f?f.textContent.trim():'';
+  };
+  shapes.forEach(sh=>{
+    const id=sh.getAttribute('ID')||nid('vs');
+    const texto=(()=>{
+      const t=[...sh.children].find(c=>c.localName==='Text');
+      return t?t.textContent.replace(/\s+/g,' ').trim():'';
+    })();
+    const xf=[...sh.children].find(c=>c.localName==='XForm');
+    if(!xf) return;
+    const px=parseFloat(achar(xf,'PinX'))||0;
+    const py=parseFloat(achar(xf,'PinY'))||0;
+    const w=(parseFloat(achar(xf,'Width'))||1.2)*PX;
+    const h=(parseFloat(achar(xf,'Height'))||0.8)*PX;
+    /* forma sem largura significativa costuma ser conector */
+    const geo=[...sh.getElementsByTagName('*')].filter(c=>c.localName==='LineTo').length;
+    const ehConector = (w<12 || h<12) && geo>0;
+    if(ehConector){
+      ligas.push({id, texto, x:px*PX, y:py*PX, w, h});
+      return;
+    }
+    nos.push({id, texto, cx:px*PX, cy:py*PX, w:Math.max(60,w), h:Math.max(40,h)});
+  });
+  if(!nos.length) throw new Error('o arquivo tem formas, mas nenhuma com texto ou tamanho reconhecível');
+  /* normaliza: Visio conta o Y de baixo para cima */
+  const maxY=Math.max(...nos.map(n=>n.cy));
+  nos.forEach(n=>{ n.cy = maxY - n.cy; });
+  ligas.forEach(l=>{ l.y = maxY - l.y; });
+  return {nos, ligas};
+}
+async function lerVSDX(buffer){
+  const arqs=await abrirZip(buffer, n=>/^visio\/pages\/page\d+\.xml$/.test(n));
+  const chave=Object.keys(arqs).sort()[0];
+  if(!chave) throw new Error('nenhuma página encontrada no .vsdx');
+  const xml=new TextDecoder('utf-8').decode(arqs[chave]);
+  const doc=new DOMParser().parseFromString(xml,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error('página do Visio ilegível');
+  const shapes=[...doc.getElementsByTagName('*')].filter(e=>e.localName==='Shape');
+  const PX=96;
+  const nos=[];
+  shapes.forEach(sh=>{
+    const cells={};
+    [...sh.getElementsByTagName('*')].filter(c=>c.localName==='Cell')
+      .forEach(c=>{ cells[c.getAttribute('N')]=parseFloat(c.getAttribute('V')); });
+    const texto=(()=>{
+      const t=[...sh.getElementsByTagName('*')].find(c=>c.localName==='Text');
+      return t?t.textContent.replace(/\s+/g,' ').trim():'';
+    })();
+    if(cells.PinX==null||cells.PinY==null) return;
+    const w=(cells.Width||1.2)*PX, h=(cells.Height||0.8)*PX;
+    if(w<12||h<12) return;
+    nos.push({id:sh.getAttribute('ID')||nid('vs'), texto,
+      cx:cells.PinX*PX, cy:cells.PinY*PX, w:Math.max(60,w), h:Math.max(40,h)});
+  });
+  if(!nos.length) throw new Error('nenhuma forma com texto encontrada no .vsdx');
+  const maxY=Math.max(...nos.map(n=>n.cy));
+  nos.forEach(n=>{ n.cy = maxY - n.cy; });
+  return {nos, ligas:[]};
+}
+/* transforma o que veio do Visio em desenho do C-Floxer */
+function visioParaModelo(dados, nomeArquivo){
+  const {nos}=dados;
+  const criados=[];
+  /* ordena por leitura: linha, depois coluna */
+  const ord=nos.slice().sort((a,b)=>{
+    const fa=Math.round(a.cy/120), fb=Math.round(b.cy/120);
+    return fa!==fb ? fa-fb : a.cx-b.cx;
+  });
+  ord.forEach((v,i)=>{
+    const primeiro=i===0, ultimo=i===ord.length-1;
+    const pergunta=/\?\s*$/.test(v.texto);
+    const tipo=traduzirTipo('', primeiro, ultimo, pergunta);
+    const d=T[tipo]||T.userTask;
+    const n=_no(tipo, Math.round(v.cx-v.w/2), Math.round(v.cy-v.h/2), v.texto||d.label,
+      {w:Math.round(v.w), h:Math.round(v.h)});
+    criados.push(n);
+  });
+  /* liga em sequência pela leitura espacial */
+  const eds=[];
+  for(let i=0;i<criados.length-1;i++){
+    eds.push(_lig(criados[i].id, criados[i+1].id));
+  }
+  return {
+    nodes:criados, edges:eds, pools:[],
+    meta:{nome:(nomeArquivo||'Importado do Visio').replace(/\.[^.]+$/,''), tipo:'AS-IS'}
+  };
+}
+
+/* =========================================================================
+   5) MODELO DE PLANILHA PARA BAIXAR
+   ========================================================================= */
+const MODELO_CABECALHO = ['#','Atividade','Tipo','Raia / Executor','Sistema',
+  'Descrição','Tempo','Volume/mês','Automação','Risco','Vai para'];
+const MODELO_LINHAS = [
+  ['1','Necessidade identificada','Início','Requisitante','','O que dispara o processo','','','','',''],
+  ['2','Registrar solicitação','Tarefa humana','Requisitante','ServiceNow','Preencher item, quantidade e justificativa','10 min','320','N1','',''],
+  ['3','Conferir os dados','Tarefa sistêmica','Analista','ServiceNow','Validar preenchimento e orçamento','15 min','320','N1','Depende do anexo correto',''],
+  ['4','Dados completos?','Decisão','Analista','','','','','','','Não:5 | Sim:6'],
+  ['5','Devolver para ajuste','Enviar','Analista','ServiceNow','Retornar apontando o que falta','5 min','40','N1','','2'],
+  ['6','Aprovar solicitação','Tarefa humana','Gestor','ServiceNow','Aprovação conforme alçada','1 dia','280','N1','',''],
+  ['7','Executar automaticamente','Tarefa automática','Sistema','SAP','Geração do pedido sem intervenção','2 min','280','N3','',''],
+  ['8','Processo concluído','Fim','Sistema','','','','','','','']
+];
+function baixarModeloLista(formato){
+  if(formato==='csv'){
+    const linhas=[MODELO_CABECALHO].concat(MODELO_LINHAS);
+    const csv='\uFEFF'+linhas.map(l=>l.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+    baixar('C-Floxer_modelo_processo.csv', csv, 'text/csv;charset=utf-8');
+    toast('Modelo em CSV baixado — preencha e importe de volta','ok');
+    return;
+  }
+  /* XLSX: monta o pacote mínimo que o Excel abre */
+  try{
+    const esc2=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+    const col=i=>{ let s='',n=i+1; while(n>0){ const r=(n-1)%26; s=String.fromCharCode(65+r)+s; n=Math.floor((n-1)/26); } return s; };
+    const linhas=[MODELO_CABECALHO].concat(MODELO_LINHAS);
+    let sheet='';
+    linhas.forEach((l,r)=>{
+      sheet+=`<row r="${r+1}">`;
+      l.forEach((c,i)=>{
+        sheet+=`<c r="${col(i)}${r+1}" t="inlineStr"><is><t xml:space="preserve">${esc2(c)}</t></is></c>`;
+      });
+      sheet+='</row>';
+    });
+    const larguras=[5,32,20,20,16,42,10,12,12,28,16]
+      .map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('');
+    const arqs=[
+      {nome:'[Content_Types].xml', txt:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>`},
+      {nome:'_rels/.rels', txt:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`},
+      {nome:'xl/workbook.xml', txt:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Processo" sheetId="1" r:id="rId1"/></sheets></workbook>`},
+      {nome:'xl/_rels/workbook.xml.rels', txt:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`},
+      {nome:'xl/worksheets/sheet1.xml', txt:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<cols>${larguras}</cols><sheetData>${sheet}</sheetData></worksheet>`}
+    ];
+    baixar('C-Floxer_modelo_processo.xlsx', zipCriar(arqs));
+    toast('Modelo em Excel baixado — preencha e importe de volta','ok');
+  }catch(e){
+    toast('Não foi possível gerar o Excel: '+e.message+' — use o CSV','err');
+  }
+}
+
+/* =========================================================================
+   6) APLICAR A IMPORTAÇÃO
+   ========================================================================= */
+function aplicarListaImportada(res, nomeArquivo){
+  const aplicar=()=>{
+    model.tabela=res.tabela;
+    model.nodes=[]; model.edges=[]; model.pools=[];
+    model.comentarios=[]; model.sugestoes=[];
+    if(!model.meta.nome || model.meta.nome==='Novo Processo')
+      model.meta.nome=(nomeArquivo||'Processo importado').replace(/\.[^.]+$/,'');
+    atualizarNomeTopo();
+    gerarDaTabela(true,{relayout:true});
+    if(typeof ajustarTodasAsCaixas==='function') ajustarTodasAsCaixas();
+    history=[]; hpos=-1; pushHistory();
+    setSel(null); renderAbas(); render(); renderProps(); renderTabela(); renderPreview();
+    atualizarSelInfo(); fit();
+    sujo=true; atualizarEstadoSalvo();
+    const raias=[...new Set(res.tabela.map(r=>r.raia).filter(Boolean))].length;
+    toast(`${res.tabela.length} etapa(s) importada(s)${raias?` em ${raias} raia(s)`:''}`,'ok');
+    irPara('modelar');
+  };
+  confirmarPerda('Importar '+(nomeArquivo||'lista'),
+    `O desenho atual será substituído pelas <b>${res.tabela.length} etapas</b> do arquivo.`,
+    aplicar, 'Sim, importar');
+}
+function aplicarVisioImportado(mod, nomeArquivo){
+  confirmarPerda('Importar do Visio',
+    `O desenho atual será substituído por <b>${mod.nodes.length} forma(s)</b> lidas do arquivo.`,
+    ()=>{
+      model.nodes=mod.nodes; model.edges=mod.edges; model.pools=[];
+      model.comentarios=[]; model.sugestoes=[]; model.tabela=[];
+      Object.assign(model.meta, mod.meta);
+      atualizarNomeTopo();
+      if(typeof ajustarTodasAsCaixas==='function') ajustarTodasAsCaixas();
+      reindexarCamadas();
+      history=[]; hpos=-1; pushHistory();
+      setSel(null); renderAbas(); render(); renderProps(); atualizarSelInfo(); fit();
+      sujo=true; atualizarEstadoSalvo();
+      toast(`${mod.nodes.length} forma(s) importada(s) do Visio — revise os tipos e as conexões`,'ok');
+      irPara('modelar');
+      setTimeout(()=>{
+        abrirModal('Importação do Visio concluída',
+          `<p style="margin-top:0;font-size:13px">Foram lidas <b>${mod.nodes.length} formas</b> e as conexões
+            foram inferidas pela ordem de leitura do desenho.</p>
+           <div class="dica-inline" style="border-left-color:var(--sel);background:#FDF8EF">
+             O Visio não guarda a semântica BPMN — apenas formas e posições. Convém revisar:
+             qual elemento é <b>início</b>, qual é <b>decisão</b>, e se as <b>setas</b> ligam o que deveriam.
+           </div>
+           <p style="font-size:12.3px;color:var(--txt2)">Use <b>✓ Validar</b> para ver o que falta,
+             e <b>⇢ Propor conexões</b> se as ligações não vieram como esperado.</p>`,
+          `<button class="btn primary" onclick="fecharModal()">Entendi</button>`);
+      }, 600);
+    }, 'Sim, importar');
+}
+
+/* =========================================================================
+   7) O LEITOR PASSA A ACEITAR OS NOVOS FORMATOS
+   ========================================================================= */
+function importarArquivo(file){
+  const nome=(file.name||'').toLowerCase();
+  /* formatos binários: lê como buffer */
+  if(nome.endsWith('.xlsx')||nome.endsWith('.xlsm')||nome.endsWith('.vsdx')){
+    const r=new FileReader();
+    r.onload=async ()=>{
+      try{
+        if(nome.endsWith('.vsdx')){
+          const dados=await lerVSDX(r.result);
+          aplicarVisioImportado(visioParaModelo(dados, file.name), file.name);
+        } else {
+          const linhas=await lerXLSX(r.result);
+          const res=listaParaTabela(linhas);
+          prevIaImportacao(res, file.name);
+        }
+      }catch(e){
+        console.error(e);
+        toast('Não foi possível ler o arquivo: '+e.message,'err');
+      }
+    };
+    r.onerror=()=>toast('Falha ao abrir o arquivo','err');
+    r.readAsArrayBuffer(file);
+    return;
+  }
+  /* texto */
+  const r=new FileReader();
+  r.onload=()=>{
+    const txt=String(r.result);
+    try{
+      if(nome.endsWith('.vbpm')||nome.endsWith('.json')) importarJSON(txt,file.name);
+      else if(nome.endsWith('.csv')||nome.endsWith('.tsv')||nome.endsWith('.txt')){
+        const linhas=lerCSV(txt);
+        const res=listaParaTabela(linhas);
+        prevIaImportacao(res, file.name);
+      }
+      else if(nome.endsWith('.vdx')){
+        const dados=lerVisioXML(txt);
+        aplicarVisioImportado(visioParaModelo(dados, file.name), file.name);
+      }
+      else importarBPMN(txt,file.name);
+    }catch(e){
+      console.error(e);
+      toast('Não foi possível ler o arquivo: '+e.message,'err');
+    }
+  };
+  r.readAsText(file,'utf-8');
+}
+
+/* prévia antes de aplicar: o usuário confere o que foi entendido */
+function prevIaImportacao(res, nomeArquivo){
+  const t=res.tabela;
+  const raias=[...new Set(t.map(r=>r.raia).filter(Boolean))];
+  const sis=[...new Set(t.map(r=>r.sistema).filter(Boolean))];
+  const reconhecidas=res.mapa._reconhecidas||0;
+  abrirModal('⤒ Conferir a importação',
+    `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">
+       Li <b>${t.length} etapa(s)</b> de <b>${esc(nomeArquivo||'arquivo')}</b> e reconheci
+       <b>${reconhecidas} coluna(s)</b>. Confira antes de gerar o desenho.</p>
+     <div class="doc kpi" style="border:0;box-shadow:none;padding:0;margin-bottom:12px">
+       <div><b>${t.length}</b><span>Etapas</span></div>
+       <div><b>${t.filter(r=>(T[r.tipo]||{}).cat==='gateway').length}</b><span>Decisões</span></div>
+       <div><b>${raias.length}</b><span>Raias</span></div>
+       <div><b>${sis.length}</b><span>Sistemas</span></div>
+     </div>
+     <div class="imp-prev">
+       <table class="doc" style="border:0;padding:0;box-shadow:none">
+         <thead><tr><th>#</th><th>Etapa</th><th>Tipo</th><th>Raia</th><th>Sistema</th></tr></thead>
+         <tbody>${t.slice(0,12).map((r,i)=>`
+           <tr><td style="text-align:center">${i+1}</td>
+             <td><b>${esc(r.nome)}</b></td>
+             <td>${esc((T[r.tipo]||{}).label||r.tipo)}</td>
+             <td>${esc(r.raia||'—')}</td>
+             <td>${esc(r.sistema||'—')}</td></tr>`).join('')}
+           ${t.length>12?`<tr><td colspan="5" style="text-align:center;color:var(--txt3)">
+             … e mais ${t.length-12} etapa(s)</td></tr>`:''}
+         </tbody>
+       </table>
+     </div>
+     ${reconhecidas<3?`<div class="dica-inline" style="border-left-color:var(--warn);background:#FDF8EF;margin-top:12px">
+       Reconheci poucas colunas. Se o resultado não ficar bom, baixe o
+       <b>modelo de planilha</b> no Leitor e use os mesmos cabeçalhos.</div>`:''}`,
+    `<button class="btn" onclick="fecharModal()">Cancelar</button>
+     <button class="btn primary" id="impOk">✓ Gerar o desenho</button>`);
+  const b=$('#impOk');
+  if(b) b.onclick=()=>{ fecharModal(); aplicarListaImportada(res, nomeArquivo); };
+}
+
+/* =========================================================================
+   8) A TELA DO LEITOR GANHA OS NOVOS FORMATOS
+   ========================================================================= */
+function ampliarTelaLeitor(){
+  const fi=$('#fileInput');
+  if(fi) fi.setAttribute('accept','.bpmn,.xml,.vbpm,.json,.csv,.tsv,.txt,.xlsx,.xlsm,.vdx,.vsdx');
+  const dz=$('#dropzone');
+  if(dz && !dz.dataset.v28){
+    dz.dataset.v28='1';
+    dz.innerHTML=`<b>Arraste o arquivo aqui ou clique para selecionar</b>
+      Processos: .bpmn · .xml · .vbpm · .json &nbsp;·&nbsp; Listas: .xlsx · .csv &nbsp;·&nbsp; Visio: .vdx · .vsdx<br>
+      O arquivo é lido localmente no seu navegador — nada é enviado para fora.`;
+  }
+  const page=dz && dz.parentNode;
+  if(page && !$('#impModelos')){
+    const d=document.createElement('div');
+    d.id='impModelos';
+    d.className='imp-modelos';
+    d.innerHTML=`
+      <div class="imp-cx">
+        <div class="imp-t">▤ Importar de uma lista</div>
+        <p>Tem o processo descrito numa planilha? Baixe o modelo, preencha uma linha por etapa
+          e importe de volta — o C-Floxer monta o desenho, com raias e decisões.</p>
+        <div class="imp-bts">
+          <button class="btn primary sm" id="impXlsx">⤓ Modelo em Excel (.xlsx)</button>
+          <button class="btn sm" id="impCsv">⤓ Modelo em CSV</button>
+          <button class="btn sm" id="impAjuda">? Como preencher</button>
+        </div>
+      </div>
+      <div class="imp-cx">
+        <div class="imp-t">◈ Vindo do Visio ou do Lucidchart</div>
+        <p>No <b>Visio</b>, salve como <b>.vsdx</b> ou <b>.vdx</b> e arraste aqui.
+          No <b>Lucidchart</b>, exporte como <b>CSV</b> — as colunas são reconhecidas automaticamente.</p>
+        <div class="imp-bts">
+          <button class="btn sm" id="impVisioAjuda">? Onde fica a exportação</button>
+        </div>
+      </div>`;
+    page.parentNode.insertBefore(d, page.nextSibling);
+    const g=id=>$('#'+id);
+    if(g('impXlsx')) g('impXlsx').onclick=()=>baixarModeloLista('xlsx');
+    if(g('impCsv')) g('impCsv').onclick=()=>baixarModeloLista('csv');
+    if(g('impAjuda')) g('impAjuda').onclick=modalComoPreencher;
+    if(g('impVisioAjuda')) g('impVisioAjuda').onclick=modalComoExportar;
+  }
+}
+function modalComoPreencher(){
+  abrirModal('Como preencher a planilha',
+    `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">
+       Uma linha por etapa, na ordem de execução. Só a coluna <b>Atividade</b> é obrigatória —
+       o resto enriquece o desenho e a documentação.</p>
+     <table class="doc" style="border:0;padding:0;box-shadow:none">
+       <thead><tr><th>Coluna</th><th>O que colocar</th></tr></thead>
+       <tbody>
+         <tr><td><b>Atividade</b></td><td>Verbo no infinitivo + objeto: “Conferir nota fiscal”</td></tr>
+         <tr><td><b>Tipo</b></td><td>Início, Tarefa humana, Tarefa automática, Decisão, Fim… Em branco, o C-Floxer deduz</td></tr>
+         <tr><td><b>Raia / Executor</b></td><td>Quem faz. Cada valor distinto vira uma raia no desenho</td></tr>
+         <tr><td><b>Sistema</b></td><td>SAP, ServiceNow, planilha…</td></tr>
+         <tr><td><b>Descrição</b></td><td>O que é feito, como e com qual critério</td></tr>
+         <tr><td><b>Tempo</b> e <b>Volume</b></td><td>“15 min”, “2 dias”; volume mensal em número</td></tr>
+         <tr><td><b>Automação</b></td><td>N0 manual · N1 apoio · N2 supervisionada · N3 plena</td></tr>
+         <tr><td><b>Vai para</b></td><td>Número da linha de destino. Em decisões: <b>Sim:6 | Não:8</b></td></tr>
+       </tbody>
+     </table>
+     <div class="dica-inline" style="margin-top:12px">
+       <b>Decisões:</b> escreva o nome como pergunta terminando em “?” e o tipo é reconhecido sozinho.
+       Em <b>Vai para</b>, separe os caminhos com “|” no formato <b>rótulo:linha</b>.
+     </div>
+     <div class="dica-inline" style="margin-top:8px">
+       <b>Não tem o cabeçalho exato?</b> Os nomes mais comuns já são reconhecidos —
+       “responsável”, “owner”, “duração”, “step”, “lane” e outros equivalentes.
+     </div>`,
+    `<button class="btn" id="cpModXlsx">⤓ Baixar o modelo</button>
+     <button class="btn primary" onclick="fecharModal()">Entendi</button>`);
+  const b=$('#cpModXlsx'); if(b) b.onclick=()=>{ baixarModeloLista('xlsx'); fecharModal(); };
+}
+function modalComoExportar(){
+  abrirModal('Exportar do Visio e do Lucidchart',
+    `<h3 style="margin:0 0 6px">Visio</h3>
+     <p style="font-size:12.5px;color:var(--txt2);margin:0 0 12px">
+       <b>Arquivo → Salvar como</b> e escolha <b>Desenho do Visio (.vsdx)</b> — que é o formato normal —
+       ou <b>Desenho XML do Visio (.vdx)</b>. Os dois funcionam aqui.</p>
+     <h3 style="margin:0 0 6px">Lucidchart</h3>
+     <p style="font-size:12.5px;color:var(--txt2);margin:0 0 12px">
+       O Lucidchart não exporta BPMN aberto. O caminho é <b>Arquivo → Baixar como → CSV</b>,
+       que gera a lista das formas. Traga esse CSV para cá.</p>
+     <h3 style="margin:0 0 6px">draw.io</h3>
+     <p style="font-size:12.5px;color:var(--txt2);margin:0 0 12px">
+       Use <b>Arquivo → Exportar como → XML</b>; se o desenho for BPMN, exporte em <b>.bpmn</b>,
+       que preserva a semântica e vem completo.</p>
+     <div class="dica-inline" style="border-left-color:var(--sel);background:#FDF8EF">
+       Nenhuma dessas ferramentas guarda o significado BPMN das formas — apenas o desenho.
+       Depois de importar, revise quais elementos são <b>início</b>, <b>decisão</b> e <b>fim</b>,
+       e use <b>✓ Validar</b> para conferir a notação.
+     </div>`,
+    `<button class="btn primary" onclick="fecharModal()">Entendi</button>`);
+}
+
+/* estilos da área de importação */
+(function(){
+  const css=`
+  .imp-modelos{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:1180px;
+    margin:16px 26px 0}
+  .imp-cx{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;box-shadow:var(--shadow)}
+  .imp-t{font-size:13px;font-weight:800;margin-bottom:5px}
+  .imp-cx p{margin:0 0 10px;font-size:11.8px;color:var(--txt2);line-height:1.55}
+  .imp-bts{display:flex;gap:6px;flex-wrap:wrap}
+  .imp-prev{max-height:280px;overflow-y:auto;border:1px solid var(--line);border-radius:9px;padding:2px 8px}
+  @media(max-width:900px){.imp-modelos{grid-template-columns:1fr}}`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   9) ARRANQUE
+   ========================================================================= */
+function initImportacao(){
+  ampliarTelaLeitor();
+  /* arrastar planilha direto para o canvas também importa */
+  const wrap=$('#canvasWrap');
+  if(wrap && !wrap.dataset.v28imp){
+    wrap.dataset.v28imp='1';
+    wrap.addEventListener('drop', ev=>{
+      const fs=ev.dataTransfer && ev.dataTransfer.files;
+      if(!fs || !fs.length) return;
+      const f=[...fs].find(x=>/\.(csv|xlsx|xlsm|tsv|vdx|vsdx)$/i.test(x.name||''));
+      if(f){
+        ev.preventDefault(); ev.stopPropagation();
+        if(typeof esconderDropOverlay==='function') esconderDropOverlay();
+        importarArquivo(f);
+      }
+    }, true);
+  }
+}
+(function(){
+  function arrancar(){
+    try{ initSimulacao(); }catch(e){}
+    try{ initImportacao(); }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,340));
+  else setTimeout(arrancar,340);
+})();
+
+</script>
+<script>
+/* =========================================================================
+   C-Floxer v29 — Simulação: decisão visível na apresentação,
+                  validação de todas as bifurcações e repetição
+   Três correções sobre a v28. Nada anterior é removido.
+   ========================================================================= */
+
+/* estado acrescentado à simulação */
+sim.usos = {};            /* edgeId -> quantas vezes foi percorrida */
+sim.ciclos = 0;           /* passagens completas pelo fluxo */
+sim.limiteCiclos = 24;    /* teto de repetições ao cobrir bifurcações */
+sim.terminou = false;     /* execução chegou ao fim; permite repetir */
+sim.coberturaOk = false;  /* todas as bifurcações foram percorridas */
+
+/* =========================================================================
+   1) VALIDAR TODAS AS BIFURCAÇÕES
+   Em vez de sortear, escolhe sempre o caminho menos percorrido. Quando a
+   execução termina e ainda há saídas intocadas, o fluxo recomeça sozinho —
+   é o "ir e voltar" até percorrer o processo inteiro.
+   ========================================================================= */
+
+/* todas as conexões que ligam elementos de fluxo */
+function arestasDeFluxo(){
+  return model.edges.filter(e=>{
+    if(e.type==='association') return false;
+    const a=nodeById(e.source), b=nodeById(e.target);
+    return a && b && ehNoDeFluxo(a) && ehNoDeFluxo(b);
+  });
+}
+/* conexões que a simulação ainda não percorreu */
+function arestasNaoCobertas(){
+  return arestasDeFluxo().filter(e=>!sim.usos[e.id]);
+}
+/* saídas de decisão ainda não experimentadas */
+function bifurcacoesPendentes(){
+  const pend=[];
+  model.nodes.filter(n=>ehNoDeFluxo(n) && T[n.type].cat==='gateway').forEach(g=>{
+    const outs=saidasSim(g.id);
+    if(outs.length<2) return;
+    const falta=outs.filter(o=>!sim.usos[o.e.id]);
+    if(falta.length) pend.push({no:g, falta});
+  });
+  return pend;
+}
+/* percentual de cobertura do fluxo */
+function coberturaSim(){
+  const todas=arestasDeFluxo();
+  if(!todas.length) return 100;
+  const feitas=todas.filter(e=>sim.usos[e.id]).length;
+  return Math.round(feitas/todas.length*100);
+}
+
+/* escolhe a saída menos percorrida — o que garante cobrir todas com o tempo.
+   Em empate, prefere a que leva a um elemento ainda não visitado. */
+function escolherSaidaCobertura(outs){
+  let melhor=outs[0], melhorUso=Infinity, melhorNovo=-1;
+  outs.forEach(o=>{
+    const uso=sim.usos[o.e.id]||0;
+    const levaANovo=sim.trilha[o.n.id]?0:1;
+    if(uso<melhorUso || (uso===melhorUso && levaANovo>melhorNovo)){
+      melhor=o; melhorUso=uso; melhorNovo=levaANovo;
+    }
+  });
+  return melhor;
+}
+/* no gateway inclusivo, abre as saídas que ainda faltam cobrir */
+function escolherSaidasInclusivas(outs){
+  const faltando=outs.filter(o=>!sim.usos[o.e.id]);
+  if(faltando.length) return faltando;
+  return [escolherSaidaCobertura(outs)];
+}
+
+/* registra a passagem — chamado toda vez que um token entra numa seta */
+function mandarPor(t, e){
+  t.edge=e.id; t.prog=0; t.esperando=false;
+  sim.usos[e.id]=(sim.usos[e.id]||0)+1;
+}
+
+/* =========================================================================
+   2) O PASSO — mesma semântica BPMN, agora com escolha por cobertura
+   ========================================================================= */
+function passoSimulacao(){
+  if(!sim.ativa || sim.travada || sim.terminou) return;
+  if(sim.passos >= sim.limitePassos){
+    sim.travada=true;
+    pausarSimulacao();
+    toast('A simulação passou de '+sim.limitePassos+' passos — pode haver um laço sem fim','err');
+    registrarHistorico('⚠ Interrompida: possível laço infinito','err');
+    return;
+  }
+  sim.passos++;
+
+  /* 1) tokens em trânsito avançam pela seta */
+  let moveu=false;
+  sim.tokens.filter(t=>t.vivo && t.edge).forEach(t=>{
+    t.prog += 1;
+    if(t.prog>=1){
+      const e=edgeById(t.edge);
+      const destino=e?nodeById(e.target):null;
+      t.edge=null; t.prog=0;
+      if(destino){
+        t.no=destino.id;
+        t.caminho.push(destino.id);
+        sim.trilha[destino.id]=(sim.trilha[destino.id]||0)+1;
+        registrarHistorico('→ '+(destino.name||T[destino.type].label), 'passo', destino.id);
+      } else { t.vivo=false; }
+    }
+    moveu=true;
+  });
+  if(moveu){ desenharSimulacao(); return; }
+
+  /* 2) tokens parados decidem para onde ir */
+  const parados=sim.tokens.filter(t=>t.vivo && !t.edge && !t.esperando);
+  if(!parados.length){
+    const esperando=sim.tokens.filter(t=>t.vivo && t.esperando);
+    if(esperando.length){
+      if(!tentarSincronizar()){
+        pausarSimulacao();
+        registrarHistorico('⚠ Fluxo travado: há caminhos aguardando sincronização que nunca chega','err');
+        toast('Fluxo travado — um paralelo abriu caminhos que não se reencontram','err');
+      }
+      return;
+    }
+    encerrarSimulacao();
+    return;
+  }
+
+  parados.forEach(t=>{
+    const n=nodeById(t.no);
+    if(!n){ t.vivo=false; return; }
+
+    if(n.type.startsWith('end')){
+      t.vivo=false; sim.concluidos++;
+      registrarHistorico('✓ Concluído em "'+(n.name||'Fim')+'"','fim', n.id);
+      if(n.type==='endTerminate'){
+        sim.tokens.forEach(x=>{ if(x!==t) x.vivo=false; });
+        registrarHistorico('⛔ Encerramento total: todos os caminhos foram interrompidos','err', n.id);
+      }
+      return;
+    }
+
+    const outs=saidasSim(t.no);
+    if(!outs.length){
+      t.vivo=false;
+      registrarHistorico('⚠ "'+(n.name||T[n.type].label)+'" não tem saída — o caminho morre aqui','err', n.id);
+      return;
+    }
+
+    const cat=T[n.type].cat;
+
+    /* paralelo: divide em todos os caminhos */
+    if(n.type==='parallelGateway' && outs.length>1){
+      registrarHistorico('⑂ Paralelo: '+outs.length+' caminhos ao mesmo tempo','ramo', n.id);
+      outs.forEach((o,i)=>{
+        if(i===0){ mandarPor(t, o.e); }
+        else {
+          const novo=novoToken(n, corDoRamo(sim.tokens.length+i));
+          novo.caminho=t.caminho.slice();
+          sim.tokens.push(novo);
+          mandarPor(novo, o.e);
+        }
+      });
+      return;
+    }
+
+    /* inclusivo: abre as saídas que ainda faltam cobrir */
+    if(n.type==='inclusiveGateway' && outs.length>1){
+      const escolhidos = sim.autoDecidir ? escolherSaidasInclusivas(outs) : outs;
+      registrarHistorico('◇ Inclusivo: '+escolhidos.length+' de '+outs.length+' caminhos','ramo', n.id);
+      escolhidos.forEach((o,i)=>{
+        if(i===0) mandarPor(t, o.e);
+        else {
+          const novo=novoToken(n, corDoRamo(sim.tokens.length+i));
+          novo.caminho=t.caminho.slice();
+          sim.tokens.push(novo);
+          mandarPor(novo, o.e);
+        }
+      });
+      return;
+    }
+
+    /* decisão exclusiva: um caminho por vez */
+    if(cat==='gateway' && outs.length>1){
+      if(!sim.autoDecidir){
+        sim.aguardando={token:t.id, no:n.id, opcoes:outs.map(o=>({
+          edge:o.e.id, rotulo:o.e.name||'(sem rótulo)',
+          destino:o.n.name||T[o.n.type].label,
+          jaFeito: !!sim.usos[o.e.id]
+        }))};
+        t.esperando=true;
+        pausarSimulacao(true);
+        desenharSimulacao();
+        montarPerguntaDecisao();
+        return;
+      }
+      /* validação de bifurcações: sempre a saída menos percorrida */
+      const esc=escolherSaidaCobertura(outs);
+      const nova=!sim.usos[esc.e.id];
+      registrarHistorico('◆ Decisão: seguiu "'+(esc.e.name||'sem rótulo')+'"'
+        +(nova?' — caminho novo':' — já percorrido'),'ramo', n.id);
+      mandarPor(t, esc.e);
+      return;
+    }
+
+    /* junção paralela: espera os outros */
+    if(n.type==='parallelGateway' && entradasSim(t.no).length>1){
+      t.esperando=true;
+      registrarHistorico('⑃ Aguardando sincronização em "'+(n.name||'Paralelo')+'"','espera', n.id);
+      tentarSincronizar();
+      return;
+    }
+
+    mandarPor(t, outs[0].e);
+  });
+
+  desenharSimulacao();
+}
+
+/* =========================================================================
+   3) FIM DA PASSAGEM — recomeça sozinho até cobrir todas as bifurcações
+   ========================================================================= */
+function encerrarSimulacao(silencioso){
+  const houve=sim.ativa;
+  const conc=sim.concluidos;
+  pausarSimulacao(true);
+  if(silencioso===true){
+    sim.ativa=false; sim.tokens=[]; sim.trilha={}; sim.historico=[];
+    sim.usos={}; sim.ciclos=0; sim.terminou=false; sim.coberturaOk=false;
+    return;
+  }
+  if(!houve) return;
+
+  const pendentes=arestasNaoCobertas();
+  const cobAgora=arestasDeFluxo().length-pendentes.length;
+  /* Se uma passagem inteira não cobriu nada de novo, o que falta é
+     inalcançável a partir do início — insistir só gastaria passos. */
+  const avancou = sim.ciclos===0 || cobAgora > (sim._cobAnterior||0);
+  sim._cobAnterior=cobAgora;
+  const podeRepetir = sim.autoDecidir
+    && pendentes.length
+    && avancou
+    && sim.ciclos < sim.limiteCiclos
+    && sim.passos < sim.limitePassos;
+
+  /* ainda há caminho por percorrer: volta ao início e segue por outro ramo */
+  if(podeRepetir){
+    sim.ciclos++;
+    registrarHistorico('↻ Passagem '+sim.ciclos+' concluída — '+pendentes.length
+      +' caminho(s) ainda não percorrido(s), recomeçando','ramo');
+    novaPassagem();
+    if(sim.rodando) return;      /* em execução contínua o tick prossegue */
+    desenharSimulacao();
+    return;
+  }
+
+  /* acabou de verdade */
+  sim.terminou=true;
+  sim.coberturaOk = pendentes.length===0;
+  const cob=coberturaSim();
+  /* o motivo é registrado antes do resumo, para aparecer na ordem certa */
+  if(!sim.coberturaOk){
+    registrarHistorico('⚠ '+pendentes.length+' conexão(ões) inalcançável(is) a partir do evento de início','err');
+  }
+  registrarHistorico('■ Fim: '+conc+' caminho(s) concluído(s) · '
+    +cob+'% do fluxo percorrido em '+(sim.ciclos+1)+' passagem(ns)','fim');
+  atualizarPainelSim();
+  atualizarBarraSimAp();
+  desenharSimulacao();
+  if(sim.coberturaOk){
+    toast(`Simulação concluída — todas as bifurcações foram validadas (${sim.passos} passos)`,'ok');
+  } else {
+    toast(`Simulação concluída — ${cob}% do fluxo percorrido · ${pendentes.length} conexão(ões) inalcançável(is)`,'err');
+  }
+}
+
+/* recomeça do início preservando o que já foi percorrido */
+function novaPassagem(){
+  const inicios=iniciosDoFluxo();
+  if(!inicios.length){ sim.terminou=true; return false; }
+  sim.tokens=[];
+  inicios.forEach((n,i)=>{
+    sim.tokens.push(novoToken(n, corDoRamo(sim.ciclos+i)));
+    sim.trilha[n.id]=(sim.trilha[n.id]||0)+1;
+  });
+  sim.aguardando=null;
+  return true;
+}
+
+/* =========================================================================
+   4) REPETIR — o botão vira ↻ quando a execução termina
+   ========================================================================= */
+function repetirSimulacao(){
+  const palco=sim.palco;
+  sim.tokens=[]; sim.proxId=1; sim.passos=0; sim.concluidos=0;
+  sim.trilha={}; sim.historico=[]; sim.usos={};
+  sim.aguardando=null; sim.travada=false; sim.terminou=false;
+  sim.coberturaOk=false; sim.ciclos=0; sim._cobAnterior=0;
+  sim.t0=Date.now();
+  const inicios=iniciosDoFluxo();
+  if(!inicios.length){ toast('Não há fluxo para simular','err'); return false; }
+  inicios.forEach((n,i)=>{
+    sim.tokens.push(novoToken(n, corDoRamo(i)));
+    sim.trilha[n.id]=1;
+  });
+  registrarHistorico('▶ Nova execução a partir de "'+(inicios[0].name||'Início')+'"','inicio', inicios[0].id);
+  desenharSimulacao();
+  atualizarBarraSimAp();
+  toast('Simulação reiniciada','ok');
+  return true;
+}
+/* reiniciar e repetir são a mesma coisa; mantém o nome antigo funcionando */
+function reiniciarSimulacao(){ return repetirSimulacao(); }
+
+/* executar respeita o estado "terminou": recomeça em vez de travar */
+function rodarSimulacao(){
+  if(!sim.ativa){ if(!iniciarSimulacao(sim.palco)) return; }
+  if(sim.terminou) repetirSimulacao();
+  if(sim.rodando) return;
+  sim.rodando=true;
+  const tick=()=>{
+    if(!sim.rodando || !sim.ativa) return;
+    passoSimulacao();
+    if(sim.terminou){ sim.rodando=false; atualizarPainelSim(); atualizarBarraSimAp(); return; }
+    if(sim.rodando) sim.timer=setTimeout(tick, velocidadeMs());
+  };
+  tick();
+  atualizarPainelSim();
+}
+function avancarSimulacao(){
+  if(!sim.ativa){ iniciarSimulacao(sim.palco); return; }
+  if(sim.terminou){ repetirSimulacao(); return; }
+  pausarSimulacao(true);
+  passoSimulacao();
+}
+
+/* iniciar zera também o que foi acrescentado */
+function iniciarSimulacao(palco){
+  const inicios=iniciosDoFluxo();
+  if(!inicios.length){
+    toast('Não há fluxo para simular — desenhe ao menos um início e uma atividade','err');
+    return false;
+  }
+  const problemas=validar(model).filter(v=>v.k==='err');
+  sim.palco=palco||'modelar';
+  sim.ativa=true; sim.rodando=false;
+  sim.tokens=[]; sim.proxId=1; sim.passos=0; sim.concluidos=0;
+  sim.trilha={}; sim.historico=[]; sim.aguardando=null;
+  sim.travada=false; sim.terminou=false; sim.coberturaOk=false;
+  sim.usos={}; sim.ciclos=0; sim._cobAnterior=0;
+  sim.t0=Date.now();
+
+  inicios.forEach((n,i)=>{
+    sim.tokens.push(novoToken(n, corDoRamo(i)));
+    sim.trilha[n.id]=1;
+  });
+  registrarHistorico('▶ Simulação iniciada em "'+(inicios[0].name||'Início')+'"','inicio', inicios[0].id);
+  if(problemas.length){
+    registrarHistorico('⚠ O desenho tem '+problemas.length+' erro(s) de notação — a simulação pode travar','err');
+  }
+  const bif=model.nodes.filter(n=>ehNoDeFluxo(n)&&T[n.type].cat==='gateway'
+    &&saidasSim(n.id).length>1).length;
+  if(bif && sim.autoDecidir){
+    registrarHistorico('⇄ Validando '+bif+' bifurcação(ões) — o fluxo repete até cobrir todos os caminhos','ramo');
+  }
+
+  montarPainelSim();
+  desenharSimulacao();
+  if(sim.palco==='modelar') fit();
+  toast(sim.autoDecidir && bif
+    ? `Simulação pronta — vai percorrer as ${bif} bifurcação(ões) automaticamente`
+    : 'Simulação pronta — use ▶ para executar ou ⇥ para avançar passo a passo','ok');
+  return true;
+}
+
+/* =========================================================================
+   5) PAINEL — cobertura visível e botão de repetir
+   ========================================================================= */
+function atualizarPainelSim(){
+  const p=$('#simPainel'); if(!p) return;
+  if(!sim.ativa){ p.classList.remove('show'); return; }
+  const vivos=sim.tokens.filter(t=>t.vivo).length;
+  const vel=SIM_VEL.find(v=>v.id===sim.velocidade)||SIM_VEL[1];
+  const ultimos=sim.historico.slice(-5).reverse();
+  const cob=coberturaSim();
+  const pend=arestasNaoCobertas().length;
+  const acao = sim.terminou ? '↻' : (sim.rodando ? '⏸' : '▶');
+  const dica = sim.terminou ? 'Repetir a simulação' : (sim.rodando ? 'Pausar' : 'Executar');
+  p.innerHTML=`
+    <div class="sim-cab">
+      <span class="sim-pt ${sim.rodando?'rodando':''} ${sim.terminou?'fim':''}"></span>
+      <b>Simulação</b>
+      <span class="sim-tag">${sim.terminou?'concluída':vivos+' token(s)'}</span>
+      <button class="sim-x" id="simFechar" title="Encerrar simulação">✕</button>
+    </div>
+    <div class="sim-ctrl">
+      <button class="sim-b" id="simReiniciar" title="Recomeçar do início">⏮</button>
+      <button class="sim-b principal ${sim.terminou?'repetir':''}" id="simPlay" title="${dica}">${acao}</button>
+      <button class="sim-b" id="simPasso" title="${sim.terminou?'Nova execução':'Avançar um passo'}">⇥</button>
+      <span class="sim-sep"></span>
+      <button class="sim-b" id="simVel" title="Velocidade">${vel.rot}</button>
+    </div>
+    <div class="sim-cob">
+      <div class="sim-cob-t">
+        <span>Cobertura do fluxo</span>
+        <b class="${cob===100?'ok':''}">${cob}%</b>
+      </div>
+      <div class="sim-cob-b"><i style="width:${cob}%" class="${cob===100?'ok':''}"></i></div>
+      <div class="sim-cob-l">${pend
+        ? pend+' caminho(s) ainda não percorrido(s)'
+        : '✓ todas as bifurcações validadas'}</div>
+    </div>
+    <div class="sim-kpi">
+      <div><b>${sim.passos}</b><span>passos</span></div>
+      <div><b>${sim.concluidos}</b><span>concluídos</span></div>
+      <div><b>${sim.ciclos+1}</b><span>passagens</span></div>
+    </div>
+    <label class="sim-check">
+      <input type="checkbox" id="simAuto" ${sim.autoDecidir?'checked':''}>
+      <span>Validar todas as bifurcações
+        <i>percorre sozinho os dois lados de cada decisão</i></span>
+    </label>
+    <div class="sim-hist">
+      ${ultimos.map(h=>`<div class="sim-h ${h.tipo}">${esc(h.txt)}</div>`).join('')
+        ||'<div class="sim-h">aguardando…</div>'}
+    </div>
+    <div class="sim-rod">
+      <button class="sim-link" id="simRelatorio">📋 Ver relatório</button>
+    </div>`;
+  p.classList.add('show');
+  const g=(id)=>$('#'+id);
+  if(g('simFechar')) g('simFechar').onclick=fecharSimulacao;
+  if(g('simPlay')) g('simPlay').onclick=()=>{
+    if(sim.terminou) repetirSimulacao();
+    else if(sim.rodando) pausarSimulacao();
+    else rodarSimulacao();
+  };
+  if(g('simPasso')) g('simPasso').onclick=avancarSimulacao;
+  if(g('simReiniciar')) g('simReiniciar').onclick=repetirSimulacao;
+  if(g('simVel')) g('simVel').onclick=()=>{
+    const i=SIM_VEL.findIndex(v=>v.id===sim.velocidade);
+    sim.velocidade=SIM_VEL[(i+1)%SIM_VEL.length].id;
+    atualizarPainelSim();
+    toast('Velocidade: '+(SIM_VEL.find(v=>v.id===sim.velocidade)||{}).nome);
+  };
+  if(g('simAuto')) g('simAuto').onchange=e=>{
+    sim.autoDecidir=e.target.checked;
+    toast(sim.autoDecidir
+      ? 'O fluxo vai percorrer sozinho todas as bifurcações'
+      : 'Você escolhe o caminho em cada decisão');
+    atualizarPainelSim();
+  };
+  if(g('simRelatorio')) g('simRelatorio').onclick=modalRelatorioSim;
+}
+
+/* =========================================================================
+   6) DECISÃO NA APRESENTAÇÃO — dentro do palco, acima de tudo
+   O modal comum tem z-index 80 e a apresentação, 200: ele ficava atrás.
+   ========================================================================= */
+function montarPerguntaDecisao(){
+  const a=sim.aguardando; if(!a) return;
+  if(sim.palco==='apresentar'){ perguntaDecisaoAp(a); return; }
+
+  const n=nodeById(a.no);
+  abrirModal('◆ '+esc(n?n.name||'Decisão':'Decisão'),
+    `<p style="margin-top:0;font-size:13px">Qual caminho o processo segue neste ponto?</p>
+     <div class="sim-opcoes">
+       ${a.opcoes.map((o,i)=>`
+         <button class="sim-op ${o.jaFeito?'feito':''}" data-simop="${o.edge}">
+           <span class="sim-op-n">${i+1}</span>
+           <span class="sim-op-txt">
+             <span class="sim-op-rot">${esc(o.rotulo)}</span>
+             <span class="sim-op-dest">→ ${esc(o.destino)}</span>
+           </span>
+           ${o.jaFeito?'<span class="sim-op-ok">já percorrido</span>':'<span class="sim-op-novo">caminho novo</span>'}
+         </button>`).join('')}
+     </div>
+     <div class="dica-inline" style="margin-top:12px">
+       Marque <b>Validar todas as bifurcações</b> no painel para o C-Floxer percorrer
+       sozinho os dois lados de cada decisão, até cobrir o fluxo inteiro.
+     </div>`,
+    `<button class="btn" id="simCancelaDec">Encerrar simulação</button>`);
+  $$('#modal [data-simop]').forEach(b=>b.onclick=()=>{
+    fecharModal();
+    responderDecisao(b.dataset.simop);
+  });
+  const bc=$('#simCancelaDec');
+  if(bc) bc.onclick=()=>{ fecharModal(); fecharSimulacao(); };
+}
+
+/* painel de decisão desenhado dentro da apresentação */
+function perguntaDecisaoAp(a){
+  const palco=$('#apPalco'); if(!palco) return;
+  let cx=$('#apDecisao');
+  if(!cx){
+    cx=document.createElement('div');
+    cx.id='apDecisao';
+    palco.appendChild(cx);
+  }
+  const n=nodeById(a.no);
+  cx.innerHTML=`
+    <div class="apd-cx">
+      <div class="apd-cab">
+        <span class="apd-ico">◆</span>
+        <div>
+          <b>${esc(n?n.name||'Decisão':'Decisão')}</b>
+          <span>Qual caminho o processo segue?</span>
+        </div>
+      </div>
+      <div class="apd-ops">
+        ${a.opcoes.map((o,i)=>`
+          <button class="apd-op ${o.jaFeito?'feito':''}" data-apd="${o.edge}">
+            <span class="apd-n">${i+1}</span>
+            <span class="apd-txt">
+              <b>${esc(o.rotulo)}</b>
+              <span>→ ${esc(o.destino)}</span>
+            </span>
+            ${o.jaFeito?'<span class="apd-tag ok">já percorrido</span>'
+                       :'<span class="apd-tag novo">caminho novo</span>'}
+          </button>`).join('')}
+      </div>
+      <div class="apd-rod">
+        <span>Tecle <b>1</b>–<b>${Math.min(9,a.opcoes.length)}</b> para escolher · <b>Esc</b> encerra</span>
+        <button class="apd-auto" id="apdAuto">⇄ Deixar o C-Floxer percorrer tudo</button>
+      </div>
+    </div>`;
+  cx.classList.add('show');
+  cx.querySelectorAll('[data-apd]').forEach(b=>b.onclick=()=>responderDecisao(b.dataset.apd));
+  const ba=$('#apdAuto');
+  if(ba) ba.onclick=()=>{
+    sim.autoDecidir=true;
+    fecharDecisaoAp();
+    const t=sim.tokens.find(x=>x.id===a.token);
+    if(t) t.esperando=false;
+    sim.aguardando=null;
+    registrarHistorico('⇄ Passou a validar todas as bifurcações automaticamente','ramo');
+    atualizarPainelSim();
+    rodarSimulacao();
+  };
+}
+function fecharDecisaoAp(){
+  const cx=$('#apDecisao');
+  if(cx && cx.classList) cx.classList.remove('show');
+}
+/* aplica a escolha, venha do modal ou do painel da apresentação */
+function responderDecisao(edgeId){
+  const a=sim.aguardando; if(!a) return;
+  const e=edgeById(edgeId);
+  const t=sim.tokens.find(x=>x.id===a.token);
+  fecharDecisaoAp();
+  if(t && e){
+    t.esperando=false;
+    registrarHistorico('◆ Você escolheu "'+(e.name||'sem rótulo')+'"','ramo', a.no);
+    mandarPor(t, e);
+  }
+  sim.aguardando=null;
+  desenharSimulacao();
+  atualizarBarraSimAp();
+}
+
+/* =========================================================================
+   7) BARRA DA APRESENTAÇÃO — repetir e cobertura
+   ========================================================================= */
+function montarBarraSimAp(){
+  const palco=$('#apPalco'); if(!palco || $('#apSimBar')) return;
+  const d=document.createElement('div');
+  d.id='apSimBar';
+  d.innerHTML=`<span class="asb-t">▶ Simulação</span>
+    <button id="asbPlay" title="Executar / pausar">▶</button>
+    <button id="asbPasso" title="Avançar um passo">⇥</button>
+    <button id="asbReiniciar" title="Repetir do início">⏮</button>
+    <span class="asb-sep"></span>
+    <span class="asb-i" id="asbInfo">—</span>
+    <button id="asbSair" title="Encerrar simulação">✕</button>`;
+  palco.appendChild(d);
+  const g=id=>$('#'+id);
+  if(g('asbPlay')) g('asbPlay').onclick=()=>{
+    if(sim.terminou) repetirSimulacao();
+    else if(sim.rodando) pausarSimulacao();
+    else rodarSimulacao();
+    atualizarBarraSimAp();
+  };
+  if(g('asbPasso')) g('asbPasso').onclick=()=>{ avancarSimulacao(); atualizarBarraSimAp(); };
+  if(g('asbReiniciar')) g('asbReiniciar').onclick=()=>{ repetirSimulacao(); atualizarBarraSimAp(); };
+  if(g('asbSair')) g('asbSair').onclick=()=>{ fecharSimulacao(); atualizarBarraSimAp(); };
+}
+function atualizarBarraSimAp(){
+  const b=$('#apSimBar'); if(!b) return;
+  b.classList.toggle('show', sim.ativa && sim.palco==='apresentar');
+  const p=$('#asbPlay');
+  if(p){
+    p.textContent = sim.terminou ? '↻' : (sim.rodando ? '⏸' : '▶');
+    p.title = sim.terminou ? 'Repetir a simulação' : (sim.rodando ? 'Pausar' : 'Executar');
+    if(p.classList) p.classList.toggle('repetir', !!sim.terminou);
+  }
+  const i=$('#asbInfo');
+  if(i){
+    if(!sim.ativa) i.textContent='—';
+    else if(sim.terminou) i.textContent=`concluída · ${coberturaSim()}% do fluxo`;
+    else i.textContent=`${sim.tokens.filter(t=>t.vivo).length} token(s) · ${coberturaSim()}%`;
+  }
+}
+/* sair da simulação também remove o painel de decisão */
+function fecharSimulacao(){
+  sim.ativa=false; sim.rodando=false; sim.terminou=false;
+  if(sim.timer){ clearTimeout(sim.timer); sim.timer=null; }
+  sim.tokens=[]; sim.trilha={}; sim.aguardando=null; sim.usos={}; sim.ciclos=0;
+  const p=$('#simPainel'); if(p) p.classList.remove('show');
+  const b=$('#tbSimular'); if(b) b.classList.remove('on');
+  fecharDecisaoAp();
+  limparSimNaApresentacao();
+  atualizarBarraSimAp();
+  render();
+}
+
+/* =========================================================================
+   8) RELATÓRIO — acrescenta a leitura de cobertura
+   ========================================================================= */
+function analisarSimulacao(){
+  const fluxo=model.nodes.filter(ehNoDeFluxo);
+  const naoVisitados=fluxo.filter(n=>!sim.trilha[n.id]);
+  const maisVisitados=Object.keys(sim.trilha)
+    .map(id=>({n:nodeById(id), q:sim.trilha[id]}))
+    .filter(o=>o.n).sort((a,b)=>b.q-a.q).slice(0,5);
+  const semFim=fluxo.filter(n=>!n.type.startsWith('end') && !saidasSim(n.id).length);
+  const paralelosAbertos=fluxo.filter(n=>n.type==='parallelGateway'
+    && saidasSim(n.id).length>1
+    && !fluxo.some(x=>x.type==='parallelGateway' && entradasSim(x.id).length>1));
+  return {naoVisitados, maisVisitados, semFim, paralelosAbertos,
+          naoCobertas:arestasNaoCobertas(), bifPendentes:bifurcacoesPendentes(),
+          cobertura:coberturaSim()};
+}
+function modalRelatorioSim(){
+  const a=analisarSimulacao();
+  abrirModal('📋 Relatório da simulação',
+    `<div class="doc kpi" style="border:0;box-shadow:none;padding:0;margin-bottom:14px">
+       <div><b>${a.cobertura}%</b><span>Cobertura do fluxo</span></div>
+       <div><b>${sim.passos}</b><span>Passos executados</span></div>
+       <div><b>${sim.ciclos+1}</b><span>Passagens</span></div>
+       <div><b>${sim.concluidos}</b><span>Caminhos concluídos</span></div>
+       <div><b>${a.naoVisitados.length}</b><span>Nunca visitados</span></div>
+     </div>
+     ${a.bifPendentes.length?`
+       <h3 style="margin:14px 0 6px">Bifurcações não percorridas por completo</h3>
+       <p style="font-size:12.3px;color:var(--txt2);margin:0 0 8px">
+         Estas decisões têm saídas que a simulação nunca tomou — em geral porque o caminho
+         de retorno não existe, ou porque a condição nunca se realiza.</p>
+       <div class="vlist">${a.bifPendentes.map(b=>
+         `<div class="vitem warn" data-simir="${b.no.id}"><div class="dot"></div><div>
+            <b>${esc(b.no.name||'Decisão')}</b>
+            <span>${b.falta.length} saída(s) sem percorrer: ${
+              b.falta.map(o=>esc(o.e.name||'sem rótulo')).join(' · ')}</span></div></div>`).join('')}</div>`
+     :`<div class="dica-inline" style="border-left-color:var(--ok)">
+         ✓ Todas as bifurcações foram percorridas em ambos os sentidos.</div>`}
+     ${a.naoVisitados.length?`
+       <h3 style="margin:14px 0 6px">Elementos que a simulação nunca alcançou</h3>
+       <div class="vlist">${a.naoVisitados.slice(0,10).map(n=>
+         `<div class="vitem warn" data-simir="${n.id}"><div class="dot"></div><div>
+            <b>${esc(n.name||T[n.type].label)}</b><span>${esc(T[n.type].label)}</span></div></div>`).join('')}</div>`
+     :`<div class="dica-inline" style="border-left-color:var(--ok);margin-top:10px">
+         ✓ Todos os elementos do fluxo foram alcançados ao menos uma vez.</div>`}
+     ${a.semFim.length?`
+       <h3 style="margin:14px 0 6px">Caminhos que morrem sem encerramento</h3>
+       <div class="vlist">${a.semFim.map(n=>
+         `<div class="vitem err" data-simir="${n.id}"><div class="dot"></div><div>
+            <b>${esc(n.name||T[n.type].label)}</b><span>não tem saída nem é evento de fim</span></div></div>`).join('')}</div>`:''}
+     ${a.paralelosAbertos.length?`
+       <h3 style="margin:14px 0 6px">Paralelos sem sincronização</h3>
+       <div class="vlist">${a.paralelosAbertos.map(n=>
+         `<div class="vitem warn" data-simir="${n.id}"><div class="dot"></div><div>
+            <b>${esc(n.name||'Paralelo')}</b><span>abre caminhos que nunca se reencontram</span></div></div>`).join('')}</div>`:''}
+     ${a.maisVisitados.length?`
+       <h3 style="margin:14px 0 6px">Elementos mais percorridos</h3>
+       <table class="doc" style="border:0;padding:0;box-shadow:none">
+         <thead><tr><th>Elemento</th><th>Tipo</th><th style="text-align:center">Passagens</th></tr></thead>
+         <tbody>${a.maisVisitados.map(o=>
+           `<tr><td><b>${esc(o.n.name||T[o.n.type].label)}</b></td>
+             <td>${esc(T[o.n.type].label)}</td>
+             <td style="text-align:center"><b>${o.q}</b></td></tr>`).join('')}</tbody>
+       </table>`:''}
+     <h3 style="margin:14px 0 6px">Registro da execução</h3>
+     <div class="sim-log">${sim.historico.map(h=>
+       `<div class="sim-h ${h.tipo}">${esc(h.txt)}</div>`).join('')}</div>`,
+    `<button class="btn" id="simLogCsv">⤓ Baixar registro</button>
+     <button class="btn primary" onclick="fecharModal()">Fechar</button>`);
+  $$('#modal [data-simir]').forEach(el=>el.onclick=()=>{
+    const n=nodeById(el.dataset.simir);
+    if(!n) return;
+    fecharModal();
+    const host=$('#svgHost');
+    view.tx=host.clientWidth/2-(n.x+n.w/2)*view.k;
+    view.ty=host.clientHeight/2-(n.y+n.h/2)*view.k;
+    setSel(n.id); render(); renderProps();
+  });
+  const bc=$('#simLogCsv');
+  if(bc) bc.onclick=()=>{
+    const linhas=[['#','Momento','Evento']];
+    sim.historico.forEach((h,i)=>linhas.push([i+1, new Date(h.quando).toLocaleTimeString('pt-BR'), h.txt]));
+    const csv='\uFEFF'+linhas.map(l=>l.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+    baixar(nomeArq('csv').replace('.csv','_simulacao.csv'), csv, 'text/csv;charset=utf-8');
+    toast('Registro da simulação baixado','ok');
+  };
+}
+
+/* =========================================================================
+   9) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  /* ---- painel de decisão dentro da apresentação ---- */
+  #apDecisao{position:absolute;inset:0;z-index:240;display:none;
+    align-items:center;justify-content:center;background:rgba(11,13,18,.72);
+    backdrop-filter:blur(4px)}
+  #apDecisao.show{display:flex}
+  .apd-cx{background:#fff;border-radius:16px;width:min(560px,90%);overflow:hidden;
+    box-shadow:0 24px 70px rgba(0,0,0,.55);animation:apdEntra .22s cubic-bezier(.2,.9,.3,1.1)}
+  @keyframes apdEntra{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
+  .apd-cab{display:flex;align-items:center;gap:13px;padding:17px 20px;
+    background:var(--musgo-0);border-bottom:1px solid var(--line)}
+  .apd-ico{width:38px;height:38px;flex:0 0 38px;border-radius:11px;background:var(--sel);
+    color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px}
+  .apd-cab b{display:block;font-size:16px;color:var(--txt);line-height:1.25}
+  .apd-cab span{font-size:12px;color:var(--txt2)}
+  .apd-ops{padding:14px 20px;display:flex;flex-direction:column;gap:8px}
+  .apd-op{display:flex;align-items:center;gap:12px;border:1px solid var(--line2);
+    background:#fff;border-radius:11px;padding:13px 15px;cursor:pointer;text-align:left;
+    transition:.12s}
+  .apd-op:hover{border-color:var(--sel);box-shadow:0 4px 16px rgba(192,138,62,.22);
+    transform:translateX(2px)}
+  .apd-op.feito{opacity:.72}
+  .apd-n{width:26px;height:26px;flex:0 0 26px;border-radius:7px;background:var(--musgo-1);
+    color:var(--acao);display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:12.5px}
+  .apd-op:hover .apd-n{background:var(--sel);color:#fff}
+  .apd-txt{flex:1;min-width:0}
+  .apd-txt b{display:block;font-size:14px;color:var(--sel);line-height:1.3}
+  .apd-txt span{font-size:12px;color:var(--txt2)}
+  .apd-tag{font-size:9.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+    border-radius:20px;padding:3px 9px;flex:0 0 auto}
+  .apd-tag.novo{background:#E8F5EE;color:var(--ok)}
+  .apd-tag.ok{background:var(--musgo-1);color:var(--txt3)}
+  .apd-rod{display:flex;align-items:center;gap:10px;padding:12px 20px;
+    border-top:1px solid var(--line);background:#FBFDFC;font-size:11.5px;color:var(--txt3)}
+  .apd-rod span{flex:1}
+  .apd-rod b{color:var(--txt2)}
+  .apd-auto{border:1px solid var(--line2);background:#fff;border-radius:8px;
+    padding:6px 12px;cursor:pointer;font-weight:700;font-size:11.5px;color:var(--acao)}
+  .apd-auto:hover{border-color:var(--acao);background:var(--musgo-0)}
+  /* ---- cobertura no painel ---- */
+  .sim-cob{padding:9px 12px;border-bottom:1px solid var(--line)}
+  .sim-cob-t{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:5px}
+  .sim-cob-t span{font-size:9.5px;font-weight:800;letter-spacing:.5px;
+    text-transform:uppercase;color:var(--txt3)}
+  .sim-cob-t b{font-size:14px;color:var(--sel);font-variant-numeric:tabular-nums}
+  .sim-cob-t b.ok{color:var(--ok)}
+  .sim-cob-b{height:5px;border-radius:3px;background:var(--musgo-1);overflow:hidden}
+  .sim-cob-b i{display:block;height:100%;background:var(--sel);border-radius:3px;
+    transition:width .3s ease}
+  .sim-cob-b i.ok{background:var(--ok)}
+  .sim-cob-l{font-size:10.3px;color:var(--txt3);margin-top:4px;line-height:1.4}
+  .sim-pt.fim{background:var(--ok);box-shadow:0 0 0 3px rgba(47,133,90,.2);animation:none}
+  .sim-b.repetir{background:var(--ok);border-color:var(--ok)}
+  .sim-b.repetir:hover{background:#256B48}
+  .sim-check{align-items:flex-start;gap:8px;padding:9px 12px}
+  .sim-check input{margin-top:2px;flex:0 0 auto}
+  .sim-check span{line-height:1.4}
+  .sim-check i{display:block;font-style:normal;font-size:10px;color:var(--txt3);margin-top:1px}
+  /* ---- opções de decisão no modal comum ---- */
+  .sim-op{flex-direction:row;align-items:center;gap:11px}
+  .sim-op-n{width:24px;height:24px;flex:0 0 24px;border-radius:7px;background:var(--musgo-1);
+    color:var(--acao);display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:12px}
+  .sim-op:hover .sim-op-n{background:var(--sel);color:#fff}
+  .sim-op-txt{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+  .sim-op.feito{opacity:.72}
+  .sim-op-novo{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;
+    background:#E8F5EE;color:var(--ok);border-radius:20px;padding:3px 9px;flex:0 0 auto}
+  .sim-op-ok{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;
+    background:var(--musgo-1);color:var(--txt3);border-radius:20px;padding:3px 9px;flex:0 0 auto}
+  #apSimBar .asb-sep{width:1px;height:16px;background:rgba(255,255,255,.2);margin:0 3px}
+  #apSimBar button.repetir{background:rgba(47,133,90,.42);border-color:rgba(47,133,90,.6)}`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   10) TECLADO — escolher o caminho por número, na apresentação
+   ========================================================================= */
+(function(){
+  document.addEventListener('keydown', e=>{
+    if(!sim.aguardando || sim.palco!=='apresentar') return;
+    const cx=$('#apDecisao');
+    if(!cx || !cx.classList || !cx.classList.contains('show')) return;
+    if(/^[1-9]$/.test(e.key)){
+      const i=+e.key-1;
+      const o=sim.aguardando.opcoes[i];
+      if(o){ e.preventDefault(); e.stopPropagation(); responderDecisao(o.edge); }
+      return;
+    }
+    if(e.key==='Escape'){
+      e.preventDefault(); e.stopPropagation();
+      fecharSimulacao();
+    }
+  }, true);
 })();
 
 </script>
