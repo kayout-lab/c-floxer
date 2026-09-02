@@ -20787,17 +20787,9 @@ function agruparConversaoVazia(m, o){
     const m=$('#ctxMenu'); if(!m || m._v34lig) return;
     m._v34lig=true;
 
-    /* a roda rola o menu; sem isto, o canvas daria zoom por baixo */
-    m.addEventListener('wheel', ev=>{
-      if(m.classList.contains('ctx-rola')){
-        ev.stopPropagation();
-        const noTopo   = m.scrollTop<=0 && ev.deltaY<0;
-        const naBase   = m.scrollTop >= m.scrollHeight-m.clientHeight && ev.deltaY>0;
-        if(!noTopo && !naBase) ev.preventDefault();
-      } else {
-        ev.stopPropagation(); ev.preventDefault();
-      }
-    }, {passive:false});
+    /* v40: o tratador de roda passou para ligarRodaCtx.
+       O daqui chamava preventDefault em todo evento — e preventDefault num
+       evento de roda cancela a rolagem nativa, justamente o que se queria. */
 
     m.addEventListener('scroll', atualizarSombraCtx);
   }
@@ -23721,6 +23713,403 @@ function initV38(){
   function arrancar(){ try{ initV38(); }catch(e){} }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,600));
   else setTimeout(arrancar,600);
+})();
+
+</script>
+<script>
+/* =========================================================================
+   C-Floxer v40 — Rolagem do menu de contexto · conversão só no painel ·
+                  rolagem das áreas de conteúdo
+
+   Causas corrigidas:
+   1) A v37 reescreveu abrirCtx e deixou de chamar posicionarCtx, que era
+      quem media o espaço e ligava a classe ctx-rola. Sem a classe, o
+      tratador da roda caía no ramo que chama preventDefault() — e
+      preventDefault num evento de roda bloqueia a rolagem nativa. A barra
+      aparecia (pelo CSS) mas nada rolava.
+   2) A conversão ocupava 10 dos 23 itens do menu. O painel de propriedades
+      já tem o controle completo, então o menu passa a apenas levar até ele.
+   3) As áreas de conteúdo não tinham overflow: conteúdo mais alto que a
+      janela ficava inacessível.
+   ========================================================================= */
+
+/* =========================================================================
+   1) MENU: montagem sem a seção de conversão
+   ========================================================================= */
+function montarConteudoCtx(alvoId, extra){
+  const o=alvoId?byId(alvoId):null;
+  let h='';
+
+  /* ---------- área vazia ---------- */
+  if(!o){
+    h+=_titulo('Nesta página');
+    h+=_mi('colar','Colar','Ctrl+V',{ico:'⎘', off:!(clipboard&&clipboard.nodes&&clipboard.nodes.length)});
+    h+=_mi('colarAqui','Colar aqui','',{ico:'⎘', off:!(clipboard&&clipboard.nodes&&clipboard.nodes.length)});
+    h+=_mi('colarImagem','Colar imagem copiada','',{ico:'🖼'});
+    h+=_sep;
+    h+=_mi('addTarefa','Nova tarefa','',{ico:'▭'});
+    h+=_mi('addImagem','Inserir imagem…','Ctrl+Shift+I',{ico:'🖼'});
+    h+=_mi('addTabela','Inserir tabela…','Ctrl+Shift+T',{ico:'▦'});
+    h+=_mi('agrupar','Agrupar por área','G',{ico:'⬚'});
+    h+=_sep;
+    h+=_mi('selTudo','Selecionar tudo','Ctrl+A',{ico:'▣'});
+    h+=_mi('autoLayout','Reorganizar automaticamente','',{ico:'⇄'});
+    h+=_mi('arrumarSetas','Arrumar as setas','Ctrl+L',{ico:'⌁'});
+    h+=_mi('proporConexoes','Propor conexões','',{ico:'⇢'});
+    h+=_sep;
+    h+=_mi('ajustar','Ajustar à tela','Ctrl+0',{ico:'⤢'});
+    h+=_mi('paleta','Paleta do desenho…','Ctrl+Shift+P',{ico:'◑'});
+    h+=_mi('novoDesenho','Novo desenho…','Ctrl+N',{ico:'✦'});
+    return h;
+  }
+
+  /* ---------- seta ---------- */
+  if(o.source){
+    h+=_titulo(EDGE_T[o.type]?EDGE_T[o.type].label:'Conexão');
+    h+=_mi('editarRotulo','Editar rótulo','F2',{ico:'✎'});
+    h+=_mi('endireitar','Endireitar','',{ico:'⌁'});
+    h+=_mi('limparDobras','Limpar dobras','',{ico:'◌'});
+    h+=_mi('inverter','Inverter sentido','',{ico:'⇄'});
+    h+=_sep;
+    h+=_titulo('Tipo de fluxo');
+    Object.keys(EDGE_T).forEach(k=>{
+      h+=`<button class="ctx-i ${o.type===k?'on':''}" data-ctx="tipoSeta:${k}">`
+        +`<span class="ctx-ico">${o.type===k?'✓':''}</span>`
+        +`<span class="ctx-txt">${esc(EDGE_T[k].label)}</span></button>`;
+    });
+    h+=_sep;
+    h+=_mi('copiarFmt','Copiar formatação','Ctrl+Shift+C',{ico:'🖌'});
+    h+=_mi('colarFmt','Aplicar formatação','Ctrl+Shift+V',{ico:'⇩', off:!pincel});
+    h+=_mi('comentar','Comentar…','Ctrl+Shift+M',{ico:'💬'});
+    h+=_sep;
+    h+=_mi('excluir','Excluir','Del',{ico:'🗑', perigo:true});
+    return h;
+  }
+
+  /* ---------- piscina ---------- */
+  if(o.lanes){
+    h+=_titulo('Piscina · '+(o.name||''));
+    h+=_mi('editarRotulo','Renomear','F2',{ico:'✎'});
+    h+=_mi('addRaia','Adicionar raia','',{ico:'＋'});
+    h+=_sep;
+    h+=_titulo('Orientação');
+    [['h','Horizontal'],['v','Vertical'],['mix','Mista (matriz)']].forEach(([k,r])=>{
+      h+=`<button class="ctx-i ${(o.orient||'h')===k?'on':''}" data-ctx="orient:${k}">`
+        +`<span class="ctx-ico">${(o.orient||'h')===k?'✓':''}</span>`
+        +`<span class="ctx-txt">${esc(r)}</span></button>`;
+    });
+    h+=_sep;
+    h+=_mi('excluir','Excluir piscina','Del',{ico:'🗑', perigo:true});
+    return h;
+  }
+
+  /* ---------- elemento ---------- */
+  const varios=selection.size>1;
+  const ehTabela=o.type==='table';
+  const cel=extra && extra.cel;
+  h+=_titulo(varios?`${selection.size} itens selecionados`:(o.name||(T[o.type]?T[o.type].label:'Elemento')));
+
+  if(ehTabela && cel){
+    h+=_titulo('Célula '+(cel.r+1)+'×'+(cel.c+1));
+    h+=_mi('celEditar','Editar célula','Enter',{ico:'✎'});
+    h+=_mi('celLimpar','Limpar conteúdo','',{ico:'◌'});
+    h+=_sep;
+    h+=_mi('linAcima','Inserir linha acima','',{ico:'⤒'});
+    h+=_mi('linAbaixo','Inserir linha abaixo','',{ico:'⤓'});
+    h+=_mi('colEsq','Inserir coluna à esquerda','',{ico:'⇤'});
+    h+=_mi('colDir','Inserir coluna à direita','',{ico:'⇥'});
+    h+=_sep;
+    h+=_mi('delLinha','Excluir esta linha','',{ico:'✕', perigo:true});
+    h+=_mi('delColuna','Excluir esta coluna','',{ico:'✕', perigo:true});
+    h+=_sep;
+  } else {
+    h+=_mi('editarRotulo','Renomear','F2',{ico:'✎'});
+  }
+  h+=_mi('recortar','Recortar','Ctrl+X',{ico:'✂'});
+  h+=_mi('copiar','Copiar','Ctrl+C',{ico:'⧉'});
+  h+=_mi('duplicar','Duplicar','Ctrl+D',{ico:'⧉'});
+  h+=_sep;
+  h+=_titulo('Camada');
+  h+=_mi('frente','Trazer para a frente','Ctrl+Shift+↑',{ico:'⤒'});
+  h+=_mi('avancar','Avançar uma','Ctrl+↑',{ico:'↑'});
+  h+=_mi('recuar','Recuar uma','Ctrl+↓',{ico:'↓'});
+  h+=_mi('tras','Enviar para trás','Ctrl+Shift+↓',{ico:'⤓'});
+
+  if(selNodes().filter(x=>!x.lanes).length>1){
+    h+=_sep;
+    h+=_titulo('Alinhar');
+    h+=`<div class="ctx-linha">
+      <button class="ctx-b" data-ctx="al:left" title="À esquerda">⇤</button>
+      <button class="ctx-b" data-ctx="al:hcenter" title="Centro horizontal">⇹</button>
+      <button class="ctx-b" data-ctx="al:right" title="À direita">⇥</button>
+      <button class="ctx-b" data-ctx="al:top" title="Ao topo">⤒</button>
+      <button class="ctx-b" data-ctx="al:vcenter" title="Centro vertical">⇳</button>
+      <button class="ctx-b" data-ctx="al:bottom" title="À base">⤓</button>
+      <button class="ctx-b" data-ctx="al:hdist" title="Distribuir">⋯</button>
+    </div>`;
+  }
+  h+=_sep;
+  h+=_mi('copiarFmt','Copiar formatação','Ctrl+Shift+C',{ico:'🖌'});
+  h+=_mi('colarFmt','Aplicar formatação','Ctrl+Shift+V',{ico:'⇩', off:!pincel});
+
+  /* A conversão saiu do menu: ocupava quase metade dos itens e é o painel
+     lateral que a oferece por completo, com todos os tipos da categoria.
+     Aqui fica apenas o atalho que leva até lá. */
+  if(!varios && T[o.type] && (T[o.type].fam||'bpmn')==='bpmn'
+     && ['activity','gateway','event'].includes(T[o.type].cat)){
+    h+=_mi('irConverter','Converter tipo…','',{ico:'⇄'});
+  }
+
+  h+=_sep;
+  h+=_mi('anexarPrint','Anexar print…','',{ico:'🖼'});
+  h+=_mi('comentar','Comentar…','Ctrl+Shift+M',{ico:'💬'});
+  h+=_sep;
+  h+=_mi('excluir', varios?`Excluir ${selection.size} itens`:'Excluir','Del',{ico:'🗑', perigo:true});
+  return h;
+}
+
+/* =========================================================================
+   2) MENU: abrir usando o posicionamento que mede o espaço
+   ========================================================================= */
+function abrirCtx(ev, alvoId, extra){
+  const m=$('#ctxMenu'); if(!m) return;
+  ctxAlvo={id:alvoId, pos:evtPos(ev), cel:extra&&extra.cel};
+
+  m.innerHTML = montarConteudoCtx(alvoId, extra);
+  m.classList.add('show');
+
+  /* ponto de ancoragem em coordenadas da área de desenho */
+  try{
+    const r=$('#svgHost').getBoundingClientRect();
+    _ctxPonto={x:ev.clientX-r.left, y:ev.clientY-r.top};
+  }catch(e){ _ctxPonto={x:ev.clientX||0, y:ev.clientY||0}; }
+
+  /* posicionarCtx mede o espaço, aperta o espaçamento se preciso e liga a
+     rolagem interna. Era esta chamada que faltava desde a v37. */
+  if(typeof posicionarCtx==='function'){
+    posicionarCtx();
+  } else {
+    const wrap=$('#canvasWrap');
+    let x=_ctxPonto.x+2, y=_ctxPonto.y+2;
+    const mw=m.offsetWidth||250, mh=m.offsetHeight||300;
+    if(wrap){
+      if(x+mw>wrap.clientWidth-8) x=Math.max(8, x-mw-4);
+      if(y+mh>wrap.clientHeight-8) y=Math.max(8, wrap.clientHeight-mh-8);
+    }
+    m.style.left=x+'px'; m.style.top=y+'px';
+  }
+
+  ligarItensCtx();
+  ligarRodaCtx();
+}
+
+/* =========================================================================
+   3) MENU: a roda passa a rolar de verdade
+   preventDefault num evento de roda cancela a rolagem nativa. O tratador
+   anterior o chamava sempre, o que impedia exatamente o que pretendia.
+   ========================================================================= */
+function ligarRodaCtx(){
+  const m=$('#ctxMenu');
+  if(!m || m._v40roda) return;
+  m._v40roda=true;
+
+  m.addEventListener('wheel', ev=>{
+    /* o desenho não deve dar zoom por baixo do menu */
+    if(ev.stopPropagation) ev.stopPropagation();
+
+    const rolavel = m.scrollHeight > m.clientHeight + 1;
+    if(!rolavel){
+      /* nada a rolar: impede a página de deslizar atrás */
+      if(ev.preventDefault) ev.preventDefault();
+      return;
+    }
+
+    const dy = ev.deltaY || 0;
+    const noTopo = m.scrollTop <= 0;
+    const naBase = m.scrollTop + m.clientHeight >= m.scrollHeight - 1;
+
+    /* Só impede o padrão nas extremidades, para a rolagem não escapar para a
+       página. No meio do percurso o navegador rola o menu sozinho — e é isso
+       que estava sendo bloqueado. */
+    if((noTopo && dy < 0) || (naBase && dy > 0)){
+      if(ev.preventDefault) ev.preventDefault();
+    }
+    /* fora das extremidades: nada de preventDefault — deixa rolar */
+
+    if(typeof atualizarSombraCtx==='function') atualizarSombraCtx();
+  }, {passive:false});
+
+  /* arrastar com o dedo, em tela sensível ao toque */
+  m.addEventListener('touchmove', ev=>{
+    if(m.scrollHeight > m.clientHeight + 1 && ev.stopPropagation) ev.stopPropagation();
+  }, {passive:true});
+
+  m.addEventListener('scroll', ()=>{
+    if(typeof atualizarSombraCtx==='function') atualizarSombraCtx();
+  });
+}
+
+/* =========================================================================
+   5) A AÇÃO QUE LEVA AO PAINEL
+   ========================================================================= */
+function irParaConversao(id){
+  const o=id?byId(id):null;
+  if(!o) return false;
+  setSel(o.id);
+  renderProps();
+  /* abre o painel lateral, se estiver recolhido */
+  try{
+    const p=$('#props');
+    if(p && p.classList && p.classList.contains('fechado')) p.classList.remove('fechado');
+    const t=$('#toggleProps');
+    if(t && t.classList) t.classList.remove('on');
+  }catch(e){}
+  /* destaca o seletor de tipo, para não haver dúvida de onde ele está */
+  setTimeout(()=>{
+    const sel=$('#n_type_full');
+    if(sel){
+      if(sel.scrollIntoView) sel.scrollIntoView({block:'center'});
+      if(sel.focus) sel.focus();
+      if(sel.classList){
+        sel.classList.add('destaque-conv');
+        setTimeout(()=>{ try{ sel.classList.remove('destaque-conv'); }catch(e){} }, 1800);
+      }
+    }
+  }, 60);
+  toast('Escolha o novo tipo no painel, em "O que este elemento é"','ok');
+  return true;
+}
+
+/* execCtx ganha a ação nova, preservando todas as anteriores */
+const _execCtxV39 = execCtx;
+execCtx = function(acao){
+  if(acao==='irConverter'){
+    const alvo=ctxAlvo||{};
+    irParaConversao(alvo.id);
+    return;
+  }
+  return _execCtxV39.apply(this, arguments);
+};
+
+/* =========================================================================
+   6) ROLAGEM DAS ÁREAS DE CONTEÚDO
+   As áreas usam flex e não tinham overflow: conteúdo mais alto que a janela
+   ficava fora de alcance. A área de desenho continua sem rolagem própria,
+   porque ela desloca o conteúdo por transformação.
+   ========================================================================= */
+(function(){
+  const css=`
+  /* ---------- menu de contexto: rolagem que funciona ---------- */
+  #ctxMenu{
+    overscroll-behavior:contain;
+    scrollbar-width:thin;
+    scrollbar-color:var(--line2) transparent;
+  }
+  #ctxMenu.ctx-rola{
+    overflow-y:auto;overflow-x:hidden;
+  }
+  #ctxMenu:not(.ctx-rola){ overflow:visible }
+  #ctxMenu::-webkit-scrollbar{width:10px}
+  #ctxMenu::-webkit-scrollbar-track{background:transparent}
+  #ctxMenu::-webkit-scrollbar-thumb{
+    background:var(--line2);border-radius:5px;border:2px solid #fff;
+  }
+  #ctxMenu::-webkit-scrollbar-thumb:hover{background:var(--txt3)}
+  /* sombra indicando que há mais conteúdo */
+  #ctxMenu.rola-cima{ box-shadow:0 12px 34px rgba(35,48,41,.22), inset 0 8px 8px -8px rgba(35,48,41,.22) }
+  #ctxMenu.rola-baixo{ box-shadow:0 12px 34px rgba(35,48,41,.22), inset 0 -8px 8px -8px rgba(35,48,41,.22) }
+  #ctxMenu.rola-cima.rola-baixo{
+    box-shadow:0 12px 34px rgba(35,48,41,.22),
+      inset 0 8px 8px -8px rgba(35,48,41,.22),
+      inset 0 -8px 8px -8px rgba(35,48,41,.22);
+  }
+  /* destaque momentâneo do seletor de tipo, ao vir do menu */
+  .destaque-conv{
+    animation:pulsaConv 1.6s ease;
+    outline:2px solid var(--acao);outline-offset:2px;border-radius:8px;
+  }
+  @keyframes pulsaConv{
+    0%,100%{ box-shadow:0 0 0 0 rgba(61,81,66,0) }
+    30%{ box-shadow:0 0 0 5px rgba(61,81,66,.20) }
+  }
+
+  /* ---------- áreas de conteúdo: rolagem vertical ---------- */
+  #view-leitor,
+  #view-exportar,
+  #view-processo,
+  #view-guia{
+    overflow-y:auto;
+    overflow-x:hidden;
+    overscroll-behavior:contain;
+    scrollbar-width:thin;
+    scrollbar-color:var(--line2) transparent;
+  }
+  #view-leitor::-webkit-scrollbar,
+  #view-exportar::-webkit-scrollbar,
+  #view-processo::-webkit-scrollbar,
+  #view-guia::-webkit-scrollbar{width:11px}
+  #view-leitor::-webkit-scrollbar-track,
+  #view-exportar::-webkit-scrollbar-track,
+  #view-processo::-webkit-scrollbar-track,
+  #view-guia::-webkit-scrollbar-track{background:transparent}
+  #view-leitor::-webkit-scrollbar-thumb,
+  #view-exportar::-webkit-scrollbar-thumb,
+  #view-processo::-webkit-scrollbar-thumb,
+  #view-guia::-webkit-scrollbar-thumb{
+    background:var(--line2);border-radius:6px;border:3px solid var(--bg);
+  }
+  #view-leitor::-webkit-scrollbar-thumb:hover,
+  #view-exportar::-webkit-scrollbar-thumb:hover,
+  #view-processo::-webkit-scrollbar-thumb:hover,
+  #view-guia::-webkit-scrollbar-thumb:hover{background:var(--txt3)}
+
+  /* o conteúdo da importação cresce conforme os elementos lidos */
+  .imp3{padding-bottom:40px}
+  .imp3-prev-d{max-height:none}
+  .imp3-out{padding-bottom:8px}
+  /* a prévia de cada página ganha rolagem própria quando o desenho é grande */
+  .imp3-prev-d{
+    max-height:280px;overflow:auto;
+    scrollbar-width:thin;scrollbar-color:var(--line2) transparent;
+  }
+  .imp3-prev-d::-webkit-scrollbar{width:8px;height:8px}
+  .imp3-prev-d::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}
+
+  /* o documento gerado já rola por dentro; garante que a área não brigue */
+  #view-processo .proc3{padding-bottom:24px}
+  `;
+  const st=document.createElement('style');
+  st.textContent=css;
+  document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   7) ARRANQUE
+   ========================================================================= */
+function initV40(){
+  ligarRodaCtx();
+  /* a rolagem da área acompanha a troca de conteúdo */
+  const _ir=irPara;
+  if(typeof _ir==='function' && !_ir._v40){
+    const novo=function(v){
+      const r=_ir.apply(this, arguments);
+      /* ao entrar numa área, volta ao topo — senão o usuário chega no meio */
+      setTimeout(()=>{
+        try{
+          const alvo=$('#view-'+v);
+          if(alvo && alvo.scrollTop!=null) alvo.scrollTop=0;
+        }catch(e){}
+      }, 30);
+      return r;
+    };
+    novo._v40=true;
+    irPara=novo;
+  }
+}
+(function(){
+  function arrancar(){ try{ initV40(); }catch(e){} }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,640));
+  else setTimeout(arrancar,640);
 })();
 
 </script>
