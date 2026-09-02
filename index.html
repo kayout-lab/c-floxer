@@ -23003,4 +23003,693 @@ function initV37(){
 })();
 
 </script>
+<script>
+/* =========================================================================
+   C-Floxer v38 — Prévia da importação · carregamento visível ·
+                  navegação do documento sem perder o cabeçalho
+                  · guarda contra desaparecimentos
+
+   O padrão que causou perdas repetidas: reconstruir uma área com
+   `view.innerHTML = ...` descarta os elementos originais. Se algum deles
+   for referenciado no código, a função continua rodando mas escreve num
+   elemento que não está mais na tela — o usuário vê nada acontecer.
+   ========================================================================= */
+
+/* =========================================================================
+   1) GUARDA ESTRUTURAL
+   Registra os elementos que cada área precisa ter e verifica depois de
+   qualquer remontagem. É a rede que impede o mesmo erro de se repetir.
+   ========================================================================= */
+const IDS_ESSENCIAIS = {
+  'view-leitor':   ['fileInput','dropzone','readOut'],
+  'view-exportar': [],
+  'view-processo': ['docOut','pgGerar','pgWord','pgHtml','pgPrint','pgIncDiag']
+};
+/* devolve os ids que faltam numa área */
+function idsFaltando(viewId){
+  const esperados=IDS_ESSENCIAIS[viewId]||[];
+  return esperados.filter(id=>!document.getElementById(id));
+}
+/* confere todas as áreas e avisa no console quando algo sumiu */
+function conferirIntegridade(){
+  const problemas={};
+  Object.keys(IDS_ESSENCIAIS).forEach(v=>{
+    const falta=idsFaltando(v);
+    if(falta.length) problemas[v]=falta;
+  });
+  if(Object.keys(problemas).length){
+    console.warn('C-Floxer · elementos ausentes após remontagem:', problemas);
+  }
+  return problemas;
+}
+
+/* =========================================================================
+   2) A TELA DO LEITOR — com prévia, carregamento e dicas de formato
+   ========================================================================= */
+function montarTelaLeitor(){
+  const view=$('#view-leitor');
+  if(!view) return;
+  if(view.dataset.v38){ ligarTelaLeitor(); return; }
+  view.dataset.v38='1';
+  view.dataset.v36='1';        /* impede a montagem anterior de rodar */
+
+  view.innerHTML=`
+    <div class="imp3">
+      <div class="imp3-cab">
+        <h2>Abrir arquivo</h2>
+        <span>A leitura acontece no seu navegador — nada é enviado para fora.</span>
+      </div>
+
+      <div class="imp3-topo">
+        <div class="imp3-drop" id="dropzone">
+          <div class="imp3-ico">⤒</div>
+          <b>Arraste o arquivo aqui</b>
+          <span>ou clique para escolher</span>
+          <input type="file" id="fileInput" style="display:none"
+            accept=".bpmn,.xml,.vbpm,.json,.csv,.tsv,.txt,.xlsx,.xlsm,.vdx,.vsdx">
+          <div class="imp3-tipos">
+            <span title="Projeto do C-Floxer — preserva tudo">.vbpm</span>
+            <span title="JSON com a mesma estrutura do .vbpm">.json</span>
+            <span title="BPMN 2.0 padrão">.bpmn</span>
+            <span title="Lista de etapas em planilha">.xlsx</span>
+            <span title="Lista de etapas separada por ponto e vírgula">.csv</span>
+            <span title="Visio moderno">.vsdx</span>
+            <span title="Visio em XML">.vdx</span>
+          </div>
+        </div>
+        <div class="imp3-lado" id="imp3Info"></div>
+      </div>
+
+      <!-- carregamento visível durante a leitura -->
+      <div class="imp3-load" id="impCarregando">
+        <div class="imp3-load-cx">
+          <div class="imp3-spin"></div>
+          <div>
+            <b id="impLoadTit">Lendo o arquivo…</b>
+            <span id="impLoadSub">Isso costuma levar poucos segundos.</span>
+          </div>
+        </div>
+        <div class="imp3-barra"><i id="impLoadBar"></i></div>
+        <div class="imp3-passos" id="impLoadPassos"></div>
+      </div>
+
+      <!-- resultado da importação: é aqui que a prévia aparece -->
+      <div id="readOut" class="imp3-out"></div>
+
+      <div class="imp3-ajuda">
+        <div class="imp3-bloco">
+          <div class="imp3-rot">▤ Trazer de uma planilha</div>
+          <p>Uma linha por etapa, na ordem de execução. Baixe o modelo, preencha
+            e traga de volta — o C-Floxer monta o desenho com raias e decisões.</p>
+          <div class="imp3-bts">
+            <button class="btn primary sm" id="imp3Xlsx">⤓ Modelo Excel</button>
+            <button class="btn sm" id="imp3Csv">⤓ Modelo CSV</button>
+            <button class="btn sm" id="imp3Ajuda">? Como preencher</button>
+          </div>
+        </div>
+
+        <div class="imp3-bloco">
+          <div class="imp3-rot">◈ Vindo do Visio ou do Lucidchart</div>
+          <p>No <b>Visio</b>, salve como <b>.vsdx</b> ou <b>.vdx</b>.
+            No <b>Lucidchart</b>, exporte como <b>CSV</b> — as colunas são
+            reconhecidas automaticamente.</p>
+          <div class="imp3-bts">
+            <button class="btn sm" id="imp3Onde">? Onde fica a exportação</button>
+          </div>
+        </div>
+
+        <div class="imp3-bloco destaque">
+          <div class="imp3-rot">{ } Montar um arquivo por programa</div>
+          <p>O <b>.vbpm</b> é <b>JSON puro</b> — a extensão existe só para o duplo
+            clique não abrir num editor de texto. Dá para gerá-lo por script ou
+            pedir a um assistente que o monte.</p>
+          <div class="imp3-bts">
+            <button class="btn primary sm" id="imp3Json">{ } Ver a estrutura</button>
+            <button class="btn sm" id="imp3Exemplo">⤓ Exemplo mínimo</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  ligarTelaLeitor();
+  conferirIntegridade();
+}
+
+function ligarTelaLeitor(){
+  const dz=$('#dropzone'), fi=$('#fileInput');
+  if(dz && !dz.dataset.lig){
+    dz.dataset.lig='1';
+    dz.onclick=()=>{ const f=$('#fileInput'); if(f) f.click(); };
+    dz.addEventListener('dragover',e=>{ e.preventDefault(); dz.classList.add('sobre'); });
+    dz.addEventListener('dragleave',()=>dz.classList.remove('sobre'));
+    dz.addEventListener('drop',e=>{
+      e.preventDefault(); dz.classList.remove('sobre');
+      const f=e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if(f) importarArquivo(f);
+    });
+  }
+  if(fi && !fi.dataset.lig){
+    fi.dataset.lig='1';
+    fi.onchange=()=>{ const f=fi.files && fi.files[0]; if(f) importarArquivo(f); };
+  }
+  const g=id=>$('#'+id);
+  if(g('imp3Xlsx')) g('imp3Xlsx').onclick=()=>baixarModeloLista('xlsx');
+  if(g('imp3Csv')) g('imp3Csv').onclick=()=>baixarModeloLista('csv');
+  if(g('imp3Ajuda')) g('imp3Ajuda').onclick=modalComoPreencher;
+  if(g('imp3Onde')) g('imp3Onde').onclick=modalComoExportar;
+  if(g('imp3Json')) g('imp3Json').onclick=modalEstruturaVbpm;
+  if(g('imp3Exemplo')) g('imp3Exemplo').onclick=baixarExemploVbpm;
+  renderInfoLeitor();
+}
+
+/* painel lateral: o que está aberto agora */
+function renderInfoLeitor(){
+  const cx=$('#imp3Info'); if(!cx) return;
+  garantirPaginas();
+  const paginas=(typeof listaPaginas==='function')?listaPaginas():[];
+  const temAlgo=paginas.some(p=>!p.vazia);
+  if(!temAlgo){
+    cx.innerHTML=`<div class="imp3-vazio">
+      <div class="imp3-vico">◇</div>
+      <b>Nenhum desenho aberto</b>
+      <span>Traga um arquivo ao lado, ou comece do zero pelo menu
+        <b>Arquivo → Novo</b>.</span>
+    </div>`;
+    return;
+  }
+  const k=(typeof kpisProjeto==='function')?kpisProjeto(paginas.filter(p=>!p.vazia))
+    :{paginas:paginas.length,atividades:0,decisoes:0,executores:0};
+  cx.innerHTML=`
+    <div class="imp3-rot">Aberto agora</div>
+    <div class="imp3-nome">${esc(model.meta.nome||'Sem nome')}</div>
+    <div class="imp3-meta">${[model.meta.area,model.meta.tipo,
+      model.meta.versao?'v'+model.meta.versao:''].filter(Boolean).map(esc).join(' · ')||'—'}</div>
+    <div class="imp3-kpi">
+      ${[[k.paginas,'Páginas'],[k.atividades,'Atividades'],
+         [k.decisoes,'Decisões'],[k.executores,'Executores']]
+        .map(([v,r])=>`<div><b>${v}</b><span>${r}</span></div>`).join('')}
+    </div>
+    <div class="imp3-acoes">
+      <button class="btn sm" onclick="irPara('modelar')">◈ Ver o desenho</button>
+      <button class="btn sm" onclick="irPara('exportar')">⤓ Exportar</button>
+    </div>`;
+}
+
+/* =========================================================================
+   3) CARREGAMENTO VISÍVEL
+   ========================================================================= */
+let _loadPassos=[];
+function mostrarCarregando(nomeArquivo){
+  const cx=$('#impCarregando');
+  if(!cx) return;
+  _loadPassos=[];
+  cx.classList.add('show');
+  const t=$('#impLoadTit'), sub=$('#impLoadSub'), bar=$('#impLoadBar');
+  if(t) t.textContent='Lendo '+(nomeArquivo||'o arquivo')+'…';
+  if(sub) sub.textContent='Isso acontece no seu navegador, sem enviar nada para fora.';
+  if(bar && bar.style) bar.style.width='8%';
+  const p=$('#impLoadPassos'); if(p) p.innerHTML='';
+  /* limpa o resultado anterior, para não confundir com o novo */
+  const out=$('#readOut'); if(out) out.innerHTML='';
+}
+function passoCarregando(texto, pct){
+  _loadPassos.push(texto);
+  const p=$('#impLoadPassos');
+  if(p) p.innerHTML=_loadPassos.map((x,i)=>
+    `<div class="imp3-passo ${i===_loadPassos.length-1?'atual':'feito'}">
+       <span>${i===_loadPassos.length-1?'◔':'✓'}</span>${esc(x)}</div>`).join('');
+  const bar=$('#impLoadBar');
+  if(bar && bar.style && pct!=null) bar.style.width=Math.min(96,pct)+'%';
+}
+function esconderCarregando(){
+  const cx=$('#impCarregando');
+  if(!cx) return;
+  const bar=$('#impLoadBar');
+  if(bar && bar.style) bar.style.width='100%';
+  setTimeout(()=>{ if(cx.classList) cx.classList.remove('show'); }, 280);
+}
+function erroCarregando(msg){
+  const cx=$('#impCarregando');
+  if(cx && cx.classList) cx.classList.remove('show');
+  const out=$('#readOut');
+  if(out) out.innerHTML=`
+    <div class="imp3-erro">
+      <div class="imp3-erro-i">✕</div>
+      <div>
+        <b>Não foi possível ler o arquivo</b>
+        <span>${esc(msg||'formato não reconhecido')}</span>
+        <div class="imp3-erro-d">Confira se o arquivo está no formato esperado.
+          Para listas, use o modelo de planilha abaixo; para projetos, o arquivo
+          precisa ter a estrutura do <b>.vbpm</b>.</div>
+      </div>
+    </div>`;
+}
+
+/* a importação passa a relatar o que está fazendo */
+/* Declarações de função são içadas para o topo do bloco: se declararmos
+   `function importarArquivo`, a constante abaixo capturaria a NOVA função e
+   criaria recursão infinita. Por isso a substituição é feita por atribuição. */
+const _importarArquivoBase = importarArquivo;
+importarArquivo = function(file){
+  if(!file) return;
+  const nome=(file.name||'arquivo');
+  mostrarCarregando(nome);
+  passoCarregando('Abrindo '+nome, 18);
+  /* o passo seguinte precisa de um respiro para a tela pintar */
+  setTimeout(()=>{
+    try{
+      const ext=(nome.match(/\.(\w+)$/)||[,''])[1].toLowerCase();
+      const rotulos={vbpm:'projeto do C-Floxer', json:'projeto em JSON', bpmn:'BPMN 2.0',
+        xml:'BPMN 2.0', csv:'lista de etapas', tsv:'lista de etapas', txt:'lista de etapas',
+        xlsx:'planilha do Excel', xlsm:'planilha do Excel', vdx:'desenho do Visio',
+        vsdx:'desenho do Visio'};
+      passoCarregando('Reconhecido como '+(rotulos[ext]||'arquivo de texto'), 42);
+      _importarArquivoBase(file);
+      /* leitura de arquivo é assíncrona; o encerramento vem em posImport */
+      setTimeout(()=>{
+        const out=$('#readOut');
+        const respondeu=out && (out.innerHTML||'').length>60;
+        if(!respondeu){
+          passoCarregando('Ainda processando…', 72);
+        }
+      }, 900);
+    }catch(e){
+      erroCarregando(e.message);
+    }
+  }, 60);
+};
+
+/* =========================================================================
+   4) A PRÉVIA VOLTA A APARECER
+   posImport escreve em #readOut. Como o elemento existe de novo na tela,
+   basta acrescentar o desenho e encerrar o carregamento.
+   ========================================================================= */
+/* mesma razão da substituição acima: atribuição, não declaração */
+const _posImportBase = posImport;
+posImport = function(nome, formato){
+  passoCarregando('Montando o desenho', 78);
+  const r=_posImportBase.apply(this, arguments);
+  try{
+    passoCarregando('Pronto', 100);
+    esconderCarregando();
+    acrescentarPreviaImport(nome, formato);
+    renderInfoLeitor();
+  }catch(e){ console.error(e); }
+  return r;
+};
+/* acrescenta a miniatura do desenho ao cartão de resultado */
+function acrescentarPreviaImport(nome, formato){
+  const out=$('#readOut');
+  if(!out) return;
+  garantirPaginas();
+  const paginas=(typeof listaPaginas==='function')?listaPaginas().filter(p=>!p.vazia):[];
+  let miniaturas='';
+  try{
+    const mostrar=paginas.slice(0,4);
+    if(mostrar.length){
+      miniaturas=`
+        <div class="imp3-prev-t">${paginas.length>1
+          ? `Prévia das páginas (${paginas.length})` : 'Prévia do desenho'}</div>
+        <div class="imp3-prev-g ${mostrar.length===1?'uma':''}">
+          ${mostrar.map(info=>comPagina(info.i, ()=>{
+            const b=conteudoBounds(model);
+            if(!b.w||!b.h) return '';
+            const svg=buildStandaloneSVG(model,{pad:24})
+              .replace('<svg width','<svg style="max-width:100%;height:auto" data-w');
+            return `<div class="imp3-prev-c" data-irpag="${info.i}" title="Abrir esta página">
+                <div class="imp3-prev-n">${esc(info.nome)}</div>
+                <div class="imp3-prev-d">${svg}</div>
+              </div>`;
+          })).join('')}
+        </div>
+        ${paginas.length>4?`<div class="imp3-prev-m">e mais ${paginas.length-4} página(s)</div>`:''}`;
+    }
+  }catch(e){ miniaturas=''; }
+
+  const acoes=`
+    <div class="imp3-prev-a">
+      <button class="btn primary sm" onclick="irPara('modelar')">◈ Abrir na modelagem</button>
+      <button class="btn sm" onclick="irPara('processo')">▦ Gerar documentação</button>
+      <button class="btn sm" onclick="irPara('exportar')">⤓ Exportar</button>
+    </div>`;
+  out.innerHTML = out.innerHTML + miniaturas + acoes;
+  (out.querySelectorAll ? out.querySelectorAll('[data-irpag]') : []).forEach(el=>{
+    el.onclick=()=>{ carregarPagina(+el.dataset.irpag); irPara('modelar'); };
+  });
+}
+
+/* =========================================================================
+   5) AJUDA SOBRE O FORMATO .vbpm
+   ========================================================================= */
+const EXEMPLO_VBPM = {
+  app:'C-Floxer', formato:'vbpm', versaoFormato:4,
+  modelo:{
+    meta:{ nome:'Processo mínimo', area:'', tipo:'AS-IS' },
+    nodes:[
+      {id:'n1',type:'startEvent',name:'Início',x:100,y:200,w:56,h:56},
+      {id:'n2',type:'userTask',name:'Fazer algo',x:250,y:187,w:150,h:82,
+       resp:'Responsável',sistema:'Sistema',doc:'O que é feito nesta etapa'},
+      {id:'n3',type:'endEvent',name:'Fim',x:470,y:200,w:56,h:56}
+    ],
+    edges:[
+      {id:'e1',type:'sequenceFlow',source:'n1',target:'n2'},
+      {id:'e2',type:'sequenceFlow',source:'n2',target:'n3'}
+    ],
+    pools:[], comentarios:[], paginas:[], paginaAtual:0, tabela:[], sugestoes:[]
+  }
+};
+function baixarExemploVbpm(){
+  baixar('C-Floxer_exemplo_minimo.vbpm', JSON.stringify(EXEMPLO_VBPM,null,2),
+    'application/json;charset=utf-8');
+  toast('Exemplo baixado — abra num editor de texto para ver a estrutura','ok');
+}
+function modalEstruturaVbpm(){
+  const ex=JSON.stringify(EXEMPLO_VBPM,null,2);
+  abrirModal('{ } A estrutura do arquivo .vbpm',
+    `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">
+      O <b>.vbpm</b> é <b>JSON puro</b>. A extensão existe apenas para o duplo clique não
+      abrir num editor de texto — renomear para <b>.json</b> também funciona.</p>
+
+     <h3 style="margin:14px 0 6px">O mínimo que o C-Floxer aceita</h3>
+     <p style="font-size:12.3px;color:var(--txt2);margin:0 0 8px">
+       A única exigência é <b>modelo.nodes</b>. Todo o resto tem valor padrão.</p>
+     <pre class="vb-cod">${esc(ex)}</pre>
+
+     <h3 style="margin:16px 0 6px">Os campos de cada elemento</h3>
+     <table class="doc" style="border:0;padding:0;box-shadow:none">
+       <thead><tr><th>Campo</th><th>Obrigatório</th><th>O que é</th></tr></thead>
+       <tbody>
+         <tr><td><b>id</b></td><td>sim</td><td>Único dentro da página</td></tr>
+         <tr><td><b>type</b></td><td>sim</td><td>startEvent, userTask, exclusiveGateway, endEvent…</td></tr>
+         <tr><td><b>x, y</b></td><td>sim</td><td>Canto superior esquerdo</td></tr>
+         <tr><td><b>w, h</b></td><td>recomendado</td><td>Sem eles o desenho sai quebrado</td></tr>
+         <tr><td><b>name</b></td><td>não</td><td>Rótulo da etapa</td></tr>
+         <tr><td><b>doc, resp, sistema</b></td><td>não</td><td>Alimentam a documentação escrita</td></tr>
+         <tr><td><b>tempo, volume, risco</b></td><td>não</td><td>Indicadores e pontos de atenção</td></tr>
+         <tr><td><b>laneId</b></td><td>não</td><td>Raia a que pertence, quando há piscina</td></tr>
+       </tbody>
+     </table>
+
+     <h3 style="margin:16px 0 6px">Regras que evitam arquivos errados</h3>
+     <ul style="font-size:12.3px;line-height:1.65;color:var(--txt2);margin:0;padding-left:20px">
+       <li>Informe sempre <b>w</b> e <b>h</b> — use as dimensões padrão do tipo.</li>
+       <li>Numa piscina, a <b>soma das alturas das raias</b> tem que bater com a altura da piscina.</li>
+       <li>Elemento em raia precisa de <b>laneId</b> <i>e</i> da posição correta — um só não basta.</li>
+       <li>Toda conexão precisa que <b>source</b> e <b>target</b> existam na mesma página.</li>
+       <li>Comece com um evento de <b>início</b> e termine com um de <b>fim</b>.</li>
+       <li>Rotule as saídas das decisões usando o campo <b>name</b> da conexão.</li>
+     </ul>
+
+     <div class="dica-inline" style="margin-top:14px">
+       Depois de gerar, abra no C-Floxer e use <b>✓ Validar</b> e <b>◉ Simular</b>.
+       Um arquivo que simula até o fim com 100% de cobertura está estruturalmente correto.
+     </div>`,
+    `<button class="btn" id="vbBaixar">⤓ Baixar este exemplo</button>
+     <button class="btn primary" onclick="fecharModal()">Entendi</button>`);
+  const b=$('#vbBaixar');
+  if(b) b.onclick=()=>{ baixarExemploVbpm(); fecharModal(); };
+}
+
+/* =========================================================================
+   6) GERAR DOCUMENTO — navegar sem perder o cabeçalho
+   O scrollIntoView rolava o ancestral rolável, que era a página inteira.
+   Dando ao documento um contêiner com rolagem própria, a barra superior
+   e o menu permanecem no lugar.
+   ========================================================================= */
+function montarSumarioDoc(){
+  const out=$('#docOut');
+  if(!out) return;
+  const html=out.innerHTML||'';
+  const sum=$('#docSum');
+  if(!/docBody/.test(html)){ if(sum){ sum.innerHTML=''; sum.classList.remove('show'); } return; }
+
+  /* cataloga e ancora na mesma passagem, para não haver desalinhamento */
+  const titulos=[];
+  let i=0;
+  const comAncoras=html.replace(/<(h[123])([^>]*)>([\s\S]*?)<\/\1>/g,
+    (todo, tag, attrs, conteudo)=>{
+      const texto=conteudo.replace(/<[^>]+>/g,'').replace(/\s+/g,' ').trim();
+      if(!texto) return todo;
+      /* Um título já ancorado continua entrando no catálogo, reaproveitando
+         o identificador: se fosse pulado, remontar o sumário o esvaziaria. */
+      const jaTem=(attrs.match(/id="(sec_\d+)"/)||[])[1];
+      const id = jaTem || ('sec_'+i);
+      i++;
+      titulos.push({nivel:+tag[1], texto, id});
+      return jaTem ? todo : `<${tag}${attrs} id="${id}">${conteudo}</${tag}>`;
+    });
+  if(titulos.length) out.innerHTML=comAncoras;
+
+  if(!sum) return;
+  if(titulos.length<2){ sum.innerHTML=''; sum.classList.remove('show'); return; }
+  sum.classList.add('show');
+  sum.innerHTML=`
+    <div class="dsum-t">Neste documento</div>
+    <div class="dsum-l">
+      ${titulos.map((t,j)=>`
+        <button class="dsum-i n${t.nivel} ${j===0?'on':''}" data-sec="${t.id}">
+          <span>${esc(t.texto)}</span>
+        </button>`).join('')}
+    </div>`;
+  (sum.querySelectorAll ? sum.querySelectorAll('[data-sec]') : []).forEach(b=>{
+    b.onclick=()=>{
+      irParaSecaoDoc(b.dataset.sec);
+      (sum.querySelectorAll('[data-sec]')||[]).forEach(x=>x.classList.toggle('on', x===b));
+    };
+  });
+}
+/* rola apenas o contêiner do documento — nunca a página */
+function irParaSecaoDoc(secId){
+  const out=$('#docOut');
+  const alvo=document.getElementById(secId)
+    || (out && out.querySelector ? out.querySelector('#'+secId) : null);
+  if(!alvo || !out) return false;
+  /* posição do título dentro do contêiner rolável */
+  let topo=0;
+  try{
+    const rAlvo=alvo.getBoundingClientRect ? alvo.getBoundingClientRect() : null;
+    const rCx=out.getBoundingClientRect ? out.getBoundingClientRect() : null;
+    if(rAlvo && rCx) topo=(out.scrollTop||0)+rAlvo.top-rCx.top-12;
+    else if(alvo.offsetTop!=null) topo=alvo.offsetTop-12;
+  }catch(e){}
+  try{
+    if(typeof out.scrollTo==='function') out.scrollTo({top:Math.max(0,topo), behavior:'smooth'});
+    else out.scrollTop=Math.max(0,topo);
+  }catch(e){ out.scrollTop=Math.max(0,topo); }
+  return true;
+}
+
+/* a geração continua chamando o sumário, agora corrigido */
+/* idem: atribuição para não capturar a própria redefinição */
+const _gerarDocV38 = gerarDoc;
+gerarDoc = function(){
+  const r=_gerarDocV38.apply(this, arguments);
+  try{ montarSumarioDoc(); atualizarBotoesDoc(); }catch(e){}
+  return r;
+};
+
+/* a tela de gerar processo, com o documento em contêiner próprio */
+function montarTelaProcesso(){
+  const view=$('#view-processo');
+  if(!view) return;
+  if(view.dataset.v38){ ligarTelaProcesso(); return; }
+  view.dataset.v38='1';
+  view.dataset.v37='1';
+  view.innerHTML=`
+    <div class="proc3">
+      <div class="proc3-cab">
+        <h2>Gerar processo</h2>
+        <div class="proc3-acoes">
+          <label class="proc3-chk">
+            <input type="checkbox" id="pgIncDiag" checked> incluir o desenho
+          </label>
+          <button class="btn primary sm" id="pgGerar">▦ Gerar documentação</button>
+          <span class="proc3-sep"></span>
+          <button class="btn sm" id="pgWord" disabled>⤓ Word</button>
+          <button class="btn sm" id="pgHtml" disabled>⤓ HTML</button>
+          <button class="btn sm" id="pgPrint" disabled>⎙ Imprimir · PDF</button>
+        </div>
+      </div>
+      <div class="proc3-corpo">
+        <aside class="proc3-sum" id="docSum"></aside>
+        <div class="proc3-doc" id="docOut">
+          <div class="empty">Clique em <b>Gerar documentação</b> para produzir a ficha do
+            processo, a tabela de atividades, a narrativa e os indicadores.</div>
+        </div>
+      </div>
+    </div>`;
+  ligarTelaProcesso();
+  conferirIntegridade();
+}
+function ligarTelaProcesso(){
+  const g=id=>$('#'+id);
+  if(g('pgGerar')) g('pgGerar').onclick=()=>{ gerarDoc(); };
+  if(g('pgWord')) g('pgWord').onclick=baixarDocWord;
+  if(g('pgHtml')) g('pgHtml').onclick=baixarDocHTML;
+  if(g('pgPrint')) g('pgPrint').onclick=imprimirDoc;
+  const cx=g('pgIncDiag');
+  if(cx) cx.onchange=()=>{ if(/docBody/.test((g('docOut')||{}).innerHTML||'')) gerarDoc(); };
+  atualizarBotoesDoc();
+}
+
+/* =========================================================================
+   7) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  /* ---------- leitor ---------- */
+  .imp3{max-width:1240px;margin:0 auto;padding:14px 20px 24px}
+  .imp3-cab{display:flex;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+  .imp3-cab h2{margin:0;font-size:16px;font-weight:800}
+  .imp3-cab span{font-size:11.5px;color:var(--txt3)}
+  .imp3-topo{display:grid;grid-template-columns:1fr 320px;gap:14px;align-items:stretch}
+  .imp3-drop{border:2px dashed var(--line2);border-radius:12px;padding:26px 20px;text-align:center;
+    cursor:pointer;background:var(--panel);transition:.15s;display:flex;flex-direction:column;
+    align-items:center;justify-content:center}
+  .imp3-drop:hover,.imp3-drop.sobre{border-color:var(--acao);background:var(--musgo-0)}
+  .imp3-ico{font-size:28px;color:var(--musgo-4);margin-bottom:4px}
+  .imp3-drop b{display:block;font-size:14px;margin-bottom:2px}
+  .imp3-drop>span{font-size:11.5px;color:var(--txt3)}
+  .imp3-tipos{display:flex;gap:5px;flex-wrap:wrap;justify-content:center;margin-top:12px}
+  .imp3-tipos span{font-family:Consolas,monospace;font-size:10px;font-weight:700;
+    background:var(--musgo-0);border:1px solid var(--line);border-radius:5px;
+    padding:3px 7px;color:var(--txt2);cursor:help}
+  .imp3-lado{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+  .imp3-vazio{text-align:center;padding:22px 10px}
+  .imp3-vico{font-size:26px;color:var(--musgo-3);margin-bottom:6px}
+  .imp3-vazio b{display:block;font-size:13px;margin-bottom:5px}
+  .imp3-vazio span{font-size:11.5px;color:var(--txt3);line-height:1.55}
+  .imp3-rot{font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+    color:var(--txt3);margin-bottom:6px}
+  .imp3-nome{font-size:14px;font-weight:800;line-height:1.3;margin-bottom:2px}
+  .imp3-meta{font-size:10.5px;color:var(--txt3);margin-bottom:10px}
+  .imp3-kpi{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  .imp3-kpi div{background:var(--musgo-0);border-radius:7px;padding:7px 9px}
+  .imp3-kpi b{display:block;font-size:16px;color:var(--acao);line-height:1.15}
+  .imp3-kpi span{font-size:8.2px;text-transform:uppercase;letter-spacing:.4px;
+    color:var(--txt3);font-weight:800}
+  .imp3-acoes{display:flex;gap:5px;margin-top:10px}
+  .imp3-acoes .btn{flex:1}
+  /* carregamento */
+  .imp3-load{display:none;margin-top:14px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:14px 16px}
+  .imp3-load.show{display:block;animation:impEntra .2s ease}
+  @keyframes impEntra{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+  .imp3-load-cx{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+  .imp3-load-cx b{display:block;font-size:13px}
+  .imp3-load-cx span{font-size:11.5px;color:var(--txt3)}
+  .imp3-spin{width:22px;height:22px;flex:0 0 22px;border-radius:50%;
+    border:2.5px solid var(--musgo-1);border-top-color:var(--acao);
+    animation:impGira .7s linear infinite}
+  @keyframes impGira{to{transform:rotate(360deg)}}
+  .imp3-barra{height:5px;border-radius:3px;background:var(--musgo-1);overflow:hidden}
+  .imp3-barra i{display:block;height:100%;width:0;background:var(--acao);border-radius:3px;
+    transition:width .35s ease}
+  .imp3-passos{display:flex;flex-direction:column;gap:3px;margin-top:9px}
+  .imp3-passo{display:flex;align-items:center;gap:7px;font-size:11.3px;color:var(--txt3)}
+  .imp3-passo span{width:13px;text-align:center;font-weight:800}
+  .imp3-passo.feito{color:var(--ok)}
+  .imp3-passo.atual{color:var(--acao);font-weight:700}
+  /* resultado */
+  .imp3-out{margin-top:14px}
+  .imp3-out:empty{display:none}
+  .imp3-prev-t{font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+    color:var(--txt3);margin:14px 0 8px}
+  .imp3-prev-g{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .imp3-prev-g.uma{grid-template-columns:1fr}
+  .imp3-prev-c{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    overflow:hidden;cursor:pointer;transition:.12s}
+  .imp3-prev-c:hover{border-color:var(--acao);box-shadow:0 3px 12px rgba(35,48,41,.12)}
+  .imp3-prev-n{font-size:11px;font-weight:700;padding:7px 11px;background:var(--musgo-0);
+    border-bottom:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .imp3-prev-d{padding:10px;max-height:230px;overflow:hidden;background:#fff}
+  .imp3-prev-d svg{max-width:100%;height:auto}
+  .imp3-prev-m{text-align:center;font-size:11px;color:var(--txt3);margin-top:8px;font-weight:600}
+  .imp3-prev-a{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
+  .imp3-erro{display:flex;gap:12px;background:#FDF3F3;border:1px solid #F0D9D9;
+    border-radius:11px;padding:14px 16px}
+  .imp3-erro-i{width:28px;height:28px;flex:0 0 28px;border-radius:8px;background:var(--err);
+    color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800}
+  .imp3-erro b{display:block;font-size:13px;color:#8A2E2E;margin-bottom:2px}
+  .imp3-erro>div>span{font-size:12px;color:#5A3A3A}
+  .imp3-erro-d{font-size:11.5px;color:#6A4A4A;margin-top:7px;line-height:1.5}
+  /* ajuda */
+  .imp3-ajuda{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:16px}
+  .imp3-bloco{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:13px 14px}
+  .imp3-bloco.destaque{border-color:var(--musgo-2);background:var(--musgo-0)}
+  .imp3-bloco p{margin:0 0 10px;font-size:11.5px;color:var(--txt2);line-height:1.55}
+  .imp3-bts{display:flex;gap:5px;flex-wrap:wrap}
+  .vb-cod{background:#F7F9F8;border:1px solid var(--line);border-left:3px solid var(--acao);
+    border-radius:8px;padding:12px 14px;font-family:Consolas,monospace;font-size:11px;
+    line-height:1.55;overflow-x:auto;max-height:300px;overflow-y:auto;margin:0;color:#2A3A30}
+  /* ---------- gerar processo ---------- */
+  .proc3{max-width:1240px;margin:0 auto;padding:14px 20px 20px}
+  .proc3-cab{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+  .proc3-cab h2{margin:0;font-size:16px;font-weight:800}
+  .proc3-acoes{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
+  .proc3-chk{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--txt2);
+    cursor:pointer;white-space:nowrap}
+  .proc3-sep{width:1px;height:20px;background:var(--line);margin:0 3px}
+  .proc3-acoes .btn.off{opacity:.45;cursor:not-allowed}
+  .proc3-corpo{display:grid;grid-template-columns:224px 1fr;gap:14px;align-items:start}
+  .proc3-sum{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:11px 10px;max-height:calc(100vh - 190px);overflow-y:auto}
+  .proc3-sum:empty{display:none}
+  /* o documento rola dentro de si mesmo: a página não se move */
+  .proc3-doc{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:20px 24px;height:calc(100vh - 190px);overflow-y:auto;overflow-x:auto;
+    scroll-behavior:smooth}
+  .proc3-doc .empty{padding:60px 20px;text-align:center;color:var(--txt3);
+    font-size:13px;line-height:1.6}
+  .proc3-doc h1{font-size:20px;margin:0 0 6px}
+  .proc3-doc h2{font-size:15px;color:var(--acao);border-bottom:2px solid var(--acao);
+    padding-bottom:5px;margin:26px 0 10px}
+  .proc3-doc h3{font-size:13px;margin:16px 0 7px}
+  .proc3-doc svg{max-width:100%;height:auto}
+  @media(max-width:1100px){
+    .imp3-topo{grid-template-columns:1fr}
+    .imp3-ajuda{grid-template-columns:1fr}
+    .imp3-prev-g{grid-template-columns:1fr}
+  }
+  @media(max-width:1000px){
+    .proc3-corpo{grid-template-columns:1fr}
+    .proc3-sum{max-height:none}
+    .proc3-doc{height:auto;max-height:none}
+  }`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   8) ARRANQUE
+   ========================================================================= */
+function initV38(){
+  montarTelaLeitor();
+  montarTelaProcesso();
+  atualizarBotoesDoc();
+  conferirIntegridade();
+  /* ao entrar numa área, garante que ela esteja montada e ligada */
+  const _ir=irPara;
+  if(typeof _ir==='function' && !_ir._v38){
+    const novo=function(v){
+      if(v==='estruturado') v='modelar';
+      const r=_ir.apply(this, [v]);
+      setTimeout(()=>{
+        try{
+          if(v==='leitor'){ montarTelaLeitor(); renderInfoLeitor(); }
+          if(v==='processo'){ montarTelaProcesso(); }
+          if(v==='exportar' && typeof montarTelaExportacao==='function'){ montarTelaExportacao(); }
+        }catch(e){}
+      }, 40);
+      return r;
+    };
+    novo._v38=true;
+    irPara=novo;
+  }
+}
+(function(){
+  function arrancar(){ try{ initV38(); }catch(e){} }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,600));
+  else setTimeout(arrancar,600);
+})();
+
+</script>
 </body></html>
