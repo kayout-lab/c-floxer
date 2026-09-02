@@ -19892,4 +19892,561 @@ function initV32(){
 
 </script>
 
+
+<script>
+/* =========================================================================
+   C-Floxer v33 — A raia é um processo: copiar leva o conteúdo junto
+
+   O defeito: `copiarSelecao` descartava piscinas com o filtro `!o.lanes`,
+   e a área de transferência só guardava `nodes` e `edges`. Selecionar uma
+   raia e copiar não levava nada — nem a raia, nem as atividades dentro.
+
+   A correção trata piscina, raias e conteúdo como uma unidade só, tanto
+   ao copiar quanto ao recortar, colar, duplicar e excluir. Vale na mesma
+   página e entre páginas.
+
+   Nada anterior é removido: tudo aqui corrige ou acrescenta.
+   ========================================================================= */
+
+/* =========================================================================
+   1) O QUE ESTÁ DENTRO DE UMA PISCINA
+   Pertence quem está atribuído a uma das raias. Quem não tem raia definida
+   entra pela geometria — é o caso de quem foi solto na faixa do título.
+   ========================================================================= */
+function conteudoDaPiscina(pool){
+  if(!pool || !pool.lanes) return [];
+  const raias=new Set((pool.lanes||[]).map(l=>l.id));
+  const dentroGeo=n=>
+    n.x >= pool.x-4 && n.x+n.w <= pool.x+pool.w+4 &&
+    n.y >= pool.y-4 && n.y+n.h <= pool.y+pool.h+4;
+  /* quem tem raia responde à raia; quem não tem, à posição.
+     Assim um elemento de outra piscina sobreposta nunca é levado por engano. */
+  return model.nodes.filter(n => n.laneId ? raias.has(n.laneId) : dentroGeo(n));
+}
+
+/* o que está dentro de uma raia específica */
+function conteudoDaRaia(pool, laneId){
+  if(!pool || !laneId) return [];
+  const g=(typeof geoRaia==='function') ? geoRaia(pool, laneId) : null;
+  return model.nodes.filter(n=>{
+    if(n.laneId) return n.laneId===laneId;
+    if(!g) return false;
+    return n.x>=g.x-4 && n.x+n.w<=g.x+g.w+4 && n.y>=g.y-4 && n.y+n.h<=g.y+g.h+4;
+  });
+}
+
+/* =========================================================================
+   2) A SELEÇÃO EXPANDIDA
+   Selecionar a piscina significa selecionar o processo inteiro. O mesmo
+   vale para o agrupamento, que já se comportava assim ao ser arrastado.
+   ========================================================================= */
+function selecaoExpandida(){
+  const pools=[], nodes=[], vistos=new Set();
+  const addNo=n=>{ if(n && !vistos.has(n.id)){ vistos.add(n.id); nodes.push(n); } };
+  [...selection].forEach(id=>{
+    const o=byId(id);
+    if(!o) return;
+    if(o.lanes){ pools.push(o); conteudoDaPiscina(o).forEach(addNo); return; }
+    if(o.source) return;                       /* conexões vêm pelas pontas */
+    if(o.titulo || o.fantasma) return;         /* sugestões não se copiam */
+    addNo(o);
+    if(o.type==='group' && typeof membrosDoGrupo==='function'){
+      membrosDoGrupo(o).forEach(addNo);
+    }
+  });
+  const ids=new Set(nodes.map(n=>n.id));
+  const edges=model.edges.filter(e=>ids.has(e.source) && ids.has(e.target));
+  return {pools, nodes, edges, ids};
+}
+
+/* resumo legível, usado nas mensagens */
+function resumoSelecao(s){
+  const partes=[];
+  if(s.pools.length){
+    const raias=s.pools.reduce((a,p)=>a+((p.lanes||[]).length),0);
+    partes.push(s.pools.length===1 ? `1 piscina com ${raias} raia(s)` : `${s.pools.length} piscinas`);
+  }
+  if(s.nodes.length) partes.push(`${s.nodes.length} elemento(s)`);
+  if(s.edges.length) partes.push(`${s.edges.length} conexão(ões)`);
+  return partes.join(' · ') || 'nada';
+}
+
+/* =========================================================================
+   3) COPIAR E RECORTAR
+   ========================================================================= */
+function copiarSelecao(recortar){
+  const s=selecaoExpandida();
+  if(!s.pools.length && !s.nodes.length){
+    toast('Selecione elementos para copiar','err');
+    return false;
+  }
+  clipboard={
+    pools: clone(s.pools),
+    nodes: clone(s.nodes),
+    edges: clone(s.edges),
+    /* memoriza de onde veio, só para a mensagem ficar clara ao colar noutra página */
+    dePagina: (model.paginas && model.paginas[model.paginaAtual])
+              ? model.paginas[model.paginaAtual].nome : ''
+  };
+  toast(resumoSelecao(s) + (recortar?' recortado(s)':' copiado(s)'), 'ok');
+  if(recortar) removerSelecao({semConfirmar:true});
+  return true;
+}
+
+/* copiar apenas uma raia, com o que está dentro dela */
+function copiarRaia(poolId, laneId){
+  const pool=model.pools.find(p=>p.id===poolId);
+  if(!pool){ toast('Piscina não encontrada','err'); return false; }
+  const lane=(pool.lanes||[]).find(l=>l.id===laneId);
+  if(!lane){ toast('Raia não encontrada','err'); return false; }
+  const dentro=conteudoDaRaia(pool, laneId);
+  const g=(typeof geoRaia==='function') ? geoRaia(pool, laneId) : null;
+
+  /* a raia viaja como uma piscina de uma faixa só — assim ela pode ser
+     colada em qualquer lugar sem depender da piscina de origem */
+  const copia=clone(pool);
+  copia.lanes=[clone(lane)];
+  const vertical=(pool.orient||'h')==='v';
+  if(vertical){ copia.w=(lane.w||lane.h); }
+  else { copia.h=lane.h; copia.y = g ? (g.y - 0) : pool.y; }
+  if(!vertical && g) copia.y = g.y;
+  if(vertical && g) copia.x = g.x;
+  if(copia.orient==='mix'){ copia.orient='h'; delete copia.cols; }  /* uma faixa não é matriz */
+  if(typeof ajustarMedidaPiscina==='function') ajustarMedidaPiscina(copia);
+
+  const ids=new Set(dentro.map(n=>n.id));
+  clipboard={
+    pools:[copia],
+    nodes:clone(dentro),
+    edges:clone(model.edges.filter(e=>ids.has(e.source)&&ids.has(e.target))),
+    dePagina:(model.paginas && model.paginas[model.paginaAtual])
+             ? model.paginas[model.paginaAtual].nome : ''
+  };
+  toast(`Raia “${lane.name||'sem nome'}” copiada com ${dentro.length} elemento(s)`,'ok');
+  return true;
+}
+
+/* =========================================================================
+   4) COLAR
+   Piscinas primeiro, para que as raias novas já existam quando os elementos
+   forem reatribuídos. Sem essa ordem, o conteúdo perderia a raia de destino.
+   ========================================================================= */
+function piscinasSeCruzam(a, b){
+  return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+}
+
+/* desloca a colagem para baixo até não cobrir nenhuma piscina existente */
+function desviarDePiscinas(pools, dx, dy){
+  if(!pools.length) return dy;
+  let tentativas=0;
+  const alturaTotal=Math.max(...pools.map(p=>p.h)) + 60;
+  while(tentativas < 24){
+    const colide=pools.some(p=>{
+      const r={x:p.x+dx, y:p.y+dy, w:p.w, h:p.h};
+      return model.pools.some(ex=>piscinasSeCruzam(r, ex));
+    });
+    if(!colide) break;
+    dy += alturaTotal;
+    tentativas++;
+  }
+  return dy;
+}
+
+function colar(pos){
+  const pools=(clipboard && clipboard.pools) || [];
+  const nodes=(clipboard && clipboard.nodes) || [];
+  const edges=(clipboard && clipboard.edges) || [];
+  if(!pools.length && !nodes.length){
+    toast('Nada na área de transferência','err');
+    return false;
+  }
+
+  /* canto superior esquerdo do que foi copiado */
+  let x1=1e9, y1=1e9;
+  pools.concat(nodes).forEach(o=>{ x1=Math.min(x1,o.x); y1=Math.min(y1,o.y); });
+
+  const host=$('#svgHost');
+  const alvo = pos || toModel(host.clientWidth/2, host.clientHeight/2);
+  let dx = pos ? snapv(alvo.x-x1) : 30;
+  let dy = pos ? snapv(alvo.y-y1) : 30;
+  dy = desviarDePiscinas(pools, dx, dy);
+
+  const mapaLane={}, mapaCol={}, mapaNo={}, novos=[], novasPiscinas=[];
+
+  /* --- piscinas e raias --- */
+  pools.forEach(p=>{
+    const c=clone(p);
+    c.id=nid('pool');
+    c.x=snapv(p.x+dx); c.y=snapv(p.y+dy);
+    (c.lanes||[]).forEach((l,i)=>{
+      const antigo=(p.lanes && p.lanes[i]) ? p.lanes[i].id : null;
+      l.id=nid('lane');
+      if(antigo) mapaLane[antigo]=l.id;
+    });
+    (c.cols||[]).forEach((col,i)=>{
+      const antigo=(p.cols && p.cols[i]) ? p.cols[i].id : null;
+      col.id=nid('col');
+      if(antigo) mapaCol[antigo]=col.id;
+    });
+    if(typeof ajustarMedidaPiscina==='function') ajustarMedidaPiscina(c);
+    model.pools.push(c);
+    novos.push(c.id); novasPiscinas.push(c);
+  });
+
+  /* --- elementos, na ordem de camada original --- */
+  const base=(typeof faixaZ==='function' ? faixaZ().max : 0) + 1;
+  const ordenados=nodes.slice().sort((a,b)=>((a.z||0)-(b.z||0)));
+  ordenados.forEach((n,i)=>{
+    const c=clone(n);
+    c.id=nid(n.type); mapaNo[n.id]=c.id;
+    c.x=snapv(n.x+dx); c.y=snapv(n.y+dy);
+    c.z=base+i;
+    if(n.laneId && mapaLane[n.laneId]){
+      /* a raia veio junto: o elemento continua nela */
+      c.laneId=mapaLane[n.laneId];
+      c.resp = n.resp || laneName(c.laneId);
+    } else if(n.laneId && pools.length){
+      /* pertencia a uma raia que não foi copiada */
+      c.laneId='';
+    } else {
+      /* elemento solto: adota a raia do lugar onde caiu, como sempre foi */
+      c.laneId=laneAt(c.x+c.w/2, c.y+c.h/2);
+      if(c.laneId && !c.resp) c.resp=laneName(c.laneId);
+    }
+    if(n.colId && mapaCol[n.colId]) c.colId=mapaCol[n.colId];
+    model.nodes.push(c);
+    novos.push(c.id);
+  });
+
+  /* --- conexões entre os elementos copiados --- */
+  edges.forEach(e=>{
+    const c=clone(e);
+    c.id=nid('flow');
+    c.source=mapaNo[e.source]; c.target=mapaNo[e.target];
+    c.waypoints=(c.waypoints||[]).map(w=>({x:w.x+dx, y:w.y+dy}));
+    if(c.labelPos) c.labelPos={x:c.labelPos.x+dx, y:c.labelPos.y+dy};
+    if(c.source && c.target){ model.edges.push(c); novos.push(c.id); }
+  });
+
+  /* as piscinas coladas se ajustam ao que receberam */
+  novasPiscinas.forEach(p=>{
+    if(typeof ajustarMedidaPiscina==='function') ajustarMedidaPiscina(p);
+    if(typeof recolocarNasRaias==='function') recolocarNasRaias(p);
+  });
+
+  selection=new Set(novos);
+  sel=novos[novos.length-1] || null;
+  pushHistory(); render(); renderProps(); atualizarSelInfo();
+
+  const mesmaPagina = !clipboard.dePagina ||
+    (model.paginas && model.paginas[model.paginaAtual] &&
+     model.paginas[model.paginaAtual].nome===clipboard.dePagina);
+  const resumo=resumoSelecao({pools, nodes, edges});
+  toast(resumo + ' colado(s)' + (mesmaPagina?'':` — vindo de “${clipboard.dePagina}”`), 'ok');
+  return true;
+}
+
+/* duplicar preserva a área de transferência anterior, como já fazia */
+function duplicarSelecao(){
+  const guardado=clipboard;
+  if(copiarSelecao(false)) colar();
+  clipboard = guardado || clipboard;
+}
+
+/* =========================================================================
+   5) EXCLUIR — coerente com o copiar
+   Excluir a piscina passa a levar o conteúdo. Sem isso, recortar deixaria
+   as atividades órfãs no desenho de origem, duplicando-as ao colar.
+   ========================================================================= */
+function removerSelecao(op){
+  if(!selection.size) return;
+  /* Só o recorte pede para não confirmar. Os botões passam o evento do
+     clique como argumento, que é truthy — por isso a marca explícita. */
+  const semConfirmar = !!(op && op.semConfirmar===true);
+
+  const s=selecaoExpandida();
+  const implicados = s.nodes.filter(n=>!selection.has(n.id)).length;
+
+  const executar=()=>{
+    const ids=new Set([...selection, ...s.nodes.map(n=>n.id), ...s.pools.map(p=>p.id)]);
+    const qtd=ids.size;
+    model.nodes = model.nodes.filter(n=>!ids.has(n.id));
+    model.pools = model.pools.filter(p=>!ids.has(p.id));
+    model.sugestoes = (model.sugestoes||[]).filter(g=>!ids.has(g.id));
+    model.edges = model.edges.filter(e=>!ids.has(e.id) && !ids.has(e.source) && !ids.has(e.target));
+    if(model.comentarios && model.comentarios.length){
+      const orf=model.comentarios.filter(c=>ids.has(c.alvo)).length;
+      model.comentarios=model.comentarios.filter(c=>!ids.has(c.alvo));
+      if(orf) toast(orf+' comentário(s) removido(s) junto com o elemento');
+    }
+    setSel(null); pushHistory(); render(); renderProps(); atualizarSelInfo();
+    if(typeof fecharBarras==='function') fecharBarras();
+    if(!semConfirmar && qtd>1) toast(qtd+' elemento(s) excluído(s)');
+  };
+
+  /* levar junto o que está dentro é destrutivo: confirma antes.
+     Vale para piscinas e para agrupamentos — nos dois casos há conteúdo
+     que o usuário não selecionou explicitamente. */
+  if(!semConfirmar && implicados>0){
+    const cont = s.pools.length
+      ? (s.pools.length===1
+          ? `A piscina <b>“${esc(s.pools[0].name||'sem nome')}”</b> será removida`
+          : `As <b>${s.pools.length} piscinas</b> selecionadas serão removidas`)
+      : `O agrupamento selecionado será removido`;
+    abrirModal('⚠ Excluir com o conteúdo',
+      `<p style="margin-top:0;font-size:13px">
+         ${cont} junto com <b>${implicados} elemento(s)</b> que estão dentro.</p>
+       <div class="dica-inline" style="border-left-color:var(--warn);background:#FDF8EF">
+         A raia é o processo: o que está dentro dela vai junto. Você pode desfazer
+         com <span class="kbd">Ctrl</span>+<span class="kbd">Z</span>.
+       </div>`,
+      `<button class="btn" onclick="fecharModal()">Cancelar</button>
+       <button class="btn primary" id="rmPoolOk" style="background:var(--err);border-color:var(--err)">Excluir tudo</button>`);
+    const b=$('#rmPoolOk');
+    if(b) b.onclick=()=>{ fecharModal(); executar(); };
+    return;
+  }
+  executar();
+}
+
+/* =========================================================================
+   6) SELEÇÃO POR ÁREA PASSA A ALCANÇAR PISCINAS
+   Arrastar uma caixa em volta da raia inteira agora a seleciona — antes,
+   a varredura só olhava para `model.nodes`.
+   ========================================================================= */
+function selecionarPorArea(r){
+  const x1=Math.min(r.x1,r.x2), x2=Math.max(r.x1,r.x2);
+  const y1=Math.min(r.y1,r.y2), y2=Math.max(r.y1,r.y2);
+  const dentro=o=>o.x>=x1-2 && o.x+o.w<=x2+2 && o.y>=y1-2 && o.y+o.h<=y2+2;
+  const toca=o=>o.x<x2 && o.x+o.w>x1 && o.y<y2 && o.y+o.h>y1;
+  const criterio = (r.x2>=r.x1) ? dentro : toca;
+  model.nodes.forEach(n=>{ if(criterio(n)) selection.add(n.id); });
+  /* a piscina só entra quando envolvida por completo — tocá-la de raspão
+     continua significando "quero o que está dentro", não a piscina toda */
+  model.pools.forEach(p=>{ if(dentro(p)) selection.add(p.id); });
+  model.edges.forEach(e=>{ if(selection.has(e.source)&&selection.has(e.target)) selection.add(e.id); });
+  sel=selection.size?[...selection][selection.size-1]:null;
+}
+
+/* =========================================================================
+   7) O CONTADOR DIZ O QUE VAI JUNTO
+   ========================================================================= */
+function atualizarSelInfo(){
+  const el=$('#selInfo'); if(!el) return;
+  const n=selection.size;
+  if(n<=1){
+    /* uma piscina sozinha já implica o conteúdo: convém avisar */
+    const o = n===1 ? byId([...selection][0]) : null;
+    if(o && o.lanes){
+      const dentro=conteudoDaPiscina(o).length;
+      el.style.display = dentro ? 'block' : 'none';
+      el.textContent = dentro ? `Piscina + ${dentro} elemento(s) dentro` : '';
+    } else {
+      el.style.display='none';
+      el.textContent='';
+    }
+  } else {
+    const s=selecaoExpandida();
+    const implicados=s.nodes.filter(x=>!selection.has(x.id)).length;
+    el.style.display='block';
+    el.textContent = implicados
+      ? `${n} selecionado(s) + ${implicados} dentro das raias`
+      : `${n} elementos selecionados`;
+  }
+  const ag=$('#alignGroup');
+  if(ag) ag.style.display = selNodes().filter(o=>!o.lanes).length>1 ? 'inline-flex' : 'none';
+}
+
+/* =========================================================================
+   8) MENU DE CONTEXTO — copiar a raia isolada
+   ========================================================================= */
+(function(){
+  if(typeof abrirCtx!=='function' || abrirCtx._v33) return;
+  const orig=abrirCtx;
+  const novo=function(ev, alvoId, extra){
+    /* descobre se o clique caiu sobre uma faixa de raia */
+    let laneId=null;
+    try{
+      const el=ev && ev.target;
+      const g=el && el.closest ? el.closest('[data-lane]') : null;
+      if(g && g.dataset && g.dataset.lane) laneId=g.dataset.lane;
+      else if(el && el.dataset && el.dataset.lane) laneId=el.dataset.lane;
+    }catch(e){}
+    orig.call(this, ev, alvoId, extra);
+    const m=$('#ctxMenu'); if(!m) return;
+    const o=alvoId?byId(alvoId):null;
+    if(!o || !o.lanes) return;
+
+    const lane=laneId ? (o.lanes||[]).find(l=>l.id===laneId) : null;
+    const dentroPool=conteudoDaPiscina(o).length;
+    let h=`<div class="ctx-sep"></div>`;
+    h+=`<div class="ctx-tit">Processo desta piscina</div>`;
+    h+=`<button class="ctx-i" data-ctx="cpPiscina"><span class="ctx-ico">⧉</span>`
+      +`<span class="ctx-txt">Copiar piscina com ${dentroPool} elemento(s)</span>`
+      +`<span class="ctx-key">Ctrl+C</span></button>`;
+    if(lane){
+      const dentroRaia=conteudoDaRaia(o, lane.id).length;
+      h+=`<button class="ctx-i" data-ctx="cpRaia:${lane.id}"><span class="ctx-ico">▤</span>`
+        +`<span class="ctx-txt">Copiar só a raia “${esc(lane.name||'sem nome')}” (${dentroRaia})</span></button>`;
+    }
+    h+=`<button class="ctx-i" data-ctx="cpDuplicar"><span class="ctx-ico">⧉</span>`
+      +`<span class="ctx-txt">Duplicar a piscina inteira</span>`
+      +`<span class="ctx-key">Ctrl+D</span></button>`;
+    h+=`<button class="ctx-i" data-ctx="cpSelDentro"><span class="ctx-ico">▣</span>`
+      +`<span class="ctx-txt">Selecionar só o conteúdo</span></button>`;
+    m.innerHTML = m.innerHTML + h;
+    m.querySelectorAll('[data-ctx]').forEach(b=>{
+      if(b.disabled) return;
+      b.onclick=()=>{ const a=b.dataset.ctx; fecharCtx(); execCtx(a); };
+    });
+  };
+  novo._v33=true;
+  abrirCtx=novo;
+})();
+
+(function(){
+  if(typeof execCtx!=='function' || execCtx._v33) return;
+  const orig=execCtx;
+  const novo=function(acao){
+    const alvo=(typeof ctxAlvo!=='undefined' && ctxAlvo) ? ctxAlvo : {};
+    const o=alvo.id?byId(alvo.id):null;
+    const [cmd,arg]=String(acao).split(':');
+    if(cmd==='cpRaia'){ if(o && o.lanes) copiarRaia(o.id, arg); return; }
+    if(acao==='cpPiscina'){ if(o){ setSel(o.id); copiarSelecao(false); } return; }
+    if(acao==='cpDuplicar'){ if(o){ setSel(o.id); duplicarSelecao(); } return; }
+    if(acao==='cpSelDentro'){
+      if(o && o.lanes){
+        const dentro=conteudoDaPiscina(o);
+        if(!dentro.length){ toast('Esta piscina está vazia','err'); return; }
+        selection=new Set(dentro.map(n=>n.id));
+        sel=dentro[0].id;
+        render(); renderProps(); atualizarSelInfo();
+        toast(dentro.length+' elemento(s) selecionado(s) dentro da piscina','ok');
+      }
+      return;
+    }
+    return orig.apply(this, arguments);
+  };
+  novo._v33=true;
+  execCtx=novo;
+})();
+
+/* =========================================================================
+   9) COLAR EM OUTRA PÁGINA — atalho no menu de páginas
+   ========================================================================= */
+function colarNaPagina(indice){
+  if(!clipboard || (!(clipboard.nodes||[]).length && !(clipboard.pools||[]).length)){
+    toast('Copie algo antes de colar em outra página','err');
+    return false;
+  }
+  if(typeof carregarPagina!=='function'){ toast('Não foi possível trocar de página','err'); return false; }
+  if(!carregarPagina(indice)) return false;
+  if(typeof renderAbas==='function') renderAbas();
+  const ok=colar();
+  if(ok) fit();
+  return ok;
+}
+
+/* =========================================================================
+   10) O PAINEL DA PISCINA GANHA AS AÇÕES DE PROCESSO
+   ========================================================================= */
+function injetarAcoesPiscina(){
+  const props=$('#props'); if(!props) return;
+  if(props.querySelector('#pcAcoes')) return;
+  if(selection.size!==1) return;
+  const o=byId([...selection][0]);
+  if(!o || !o.lanes) return;
+  const alvo=props.querySelector('#delEl');
+  if(!alvo || !alvo.parentNode) return;
+
+  const dentro=conteudoDaPiscina(o);
+  const paginas=(model.paginas||[]);
+  const div=document.createElement('div');
+  div.id='pcAcoes';
+  div.innerHTML=`
+    <div class="divider"></div>
+    <h3>Copiar este processo</h3>
+    <div class="sub">A piscina, as raias e os <b>${dentro.length} elemento(s)</b> dentro dela
+      viajam como uma coisa só.</div>
+    <div class="pc-bts">
+      <button class="btn sm" id="pc_copiar">⧉ Copiar</button>
+      <button class="btn sm" id="pc_dup">⧉ Duplicar aqui</button>
+    </div>
+    ${paginas.length>1?`
+      <div class="field" style="margin-top:8px">
+        <label>Copiar para outra página</label>
+        <div class="pc-linha">
+          <select id="pc_pg">
+            ${paginas.map((p,i)=>`<option value="${i}" ${i===model.paginaAtual?'disabled':''}>${esc(p.nome)}${i===model.paginaAtual?' (atual)':''}</option>`).join('')}
+          </select>
+          <button class="btn sm" id="pc_enviar">⇥</button>
+        </div>
+      </div>`:''}
+    <div class="pc-bts" style="margin-top:6px">
+      <button class="btn sm" id="pc_selDentro">▣ Selecionar o conteúdo</button>
+    </div>`;
+  alvo.parentNode.insertBefore(div, alvo);
+
+  const g=id=>$('#'+id);
+  if(g('pc_copiar')) g('pc_copiar').onclick=()=>{ setSel(o.id); copiarSelecao(false); };
+  if(g('pc_dup')) g('pc_dup').onclick=()=>{ setSel(o.id); duplicarSelecao(); };
+  if(g('pc_enviar')) g('pc_enviar').onclick=()=>{
+    const i=+($('#pc_pg')||{value:-1}).value;
+    if(i<0 || i===model.paginaAtual){ toast('Escolha uma página diferente','err'); return; }
+    setSel(o.id);
+    if(copiarSelecao(false)) colarNaPagina(i);
+  };
+  if(g('pc_selDentro')) g('pc_selDentro').onclick=()=>{
+    if(!dentro.length){ toast('Esta piscina está vazia','err'); return; }
+    selection=new Set(dentro.map(n=>n.id));
+    sel=dentro[0].id;
+    render(); renderProps(); atualizarSelInfo();
+  };
+}
+
+(function(){
+  if(typeof renderProps!=='function' || renderProps._v33) return;
+  const orig=renderProps;
+  const novo=function(){
+    const r=orig.apply(this, arguments);
+    try{ injetarAcoesPiscina(); }catch(e){}
+    return r;
+  };
+  novo._v33=true;
+  renderProps=novo;
+})();
+
+/* =========================================================================
+   11) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  .pc-bts{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .pc-linha{display:flex;gap:5px;align-items:center}
+  .pc-linha select{flex:1;min-width:0;border:1px solid var(--line2);border-radius:7px;
+    padding:6px 8px;background:#fff;outline:none}
+  .pc-linha .btn{flex:0 0 34px;justify-content:center;font-weight:800}
+  #selInfo{max-width:60%;text-align:center;line-height:1.35}`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   12) ARRANQUE
+   ========================================================================= */
+(function(){
+  function arrancar(){
+    /* os botões da barra apontam para as funções antigas por referência;
+       religa-os às versões corrigidas */
+    try{
+      const c=$('#tbCopy'); if(c) c.onclick=()=>copiarSelecao(false);
+      const v=$('#tbPaste'); if(v) v.onclick=()=>colar();
+    }catch(e){}
+    try{ if(typeof atualizarSelInfo==='function') atualizarSelInfo(); }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,620));
+  else setTimeout(arrancar,620);
+})();
+
+</script>
+
 </body></html>
