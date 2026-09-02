@@ -1236,9 +1236,7 @@ table.grid select{font-size:11px}
 <section class="view" id="view-processo">
   <div class="page">
     <h2>▦ Gerar processo</h2>
-    <p class="lead">A partir do que foi desenhado, o C-Floxer gera a documentação do processo: ficha de identificação,
-      SIPOC, atores e raias, tabela de atividades, narrativa sequencial, regras de decisão, inventário de sistemas,
-      leitura de automação (régua N|G|Q) e indicadores sugeridos — pronta para virar PO/IT.</p>
+    
     <div class="bar" style="border:1px solid var(--line);border-radius:10px;margin-bottom:14px;background:#fff">
       <button class="btn primary" id="pgGerar">⚙ Gerar documentação</button>
       <button class="btn" id="pgWord">⤓ Baixar .doc (Word)</button>
@@ -12434,17 +12432,7 @@ function initV23(){
     logo.setAttribute('title','Marca do C-Floxer — clique para ampliar, copiar ou baixar');
   }
   /* menu de contexto do canvas ganha “Novo…” e “Colar imagem” */
-  if(typeof execCtx==='function' && !execCtx._v23){
-    const orig=execCtx;
-    const novo=function(acao){
-      if(acao==='novoDesenho'){ modalNovo(); return; }
-      if(acao==='colarImagem'){ colarImagemDaAreaTransferencia((ctxAlvo&&ctxAlvo.pos)||ultimoMouse); return; }
-      if(acao==='marca'){ modalMarca(); return; }
-      return orig.apply(this, arguments);
-    };
-    novo._v23=true;
-    execCtx=novo;
-  }
+  /* v37: o execCtx definitivo já trata novoDesenho, colarImagem e marca. */
 }
 /* acrescenta os itens novos ao menu de contexto do canvas vazio */
 (function(){
@@ -12460,11 +12448,8 @@ function initV23(){
       + `<span class="ctx-txt">Novo desenho…</span><span class="ctx-key">Ctrl+N</span></button>`
       + `<button class="ctx-i" data-ctx="colarImagem"><span class="ctx-ico">🖼</span>`
       + `<span class="ctx-txt">Colar imagem copiada</span><span class="ctx-key">Ctrl+V</span></button>`;
-    m.innerHTML = m.innerHTML + extraHTML;
-    m.querySelectorAll('[data-ctx]').forEach(b=>{
-      if(b.disabled) return;
-      b.onclick=()=>{ const a=b.dataset.ctx; fecharCtx(); execCtx(a); };
-    });
+    /* v37: o menu único já inclui estes itens; reatribuir innerHTML aqui
+       descartava os tratadores de todos os demais. */
   };
   novo._v23=true;
   abrirCtx=novo;
@@ -22443,6 +22428,578 @@ function initV36(){
   function arrancar(){ try{ initV36(); }catch(e){} }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,520));
   else setTimeout(arrancar,520);
+})();
+
+</script>
+<script>
+/* =========================================================================
+   C-Floxer v37 — Menu de contexto confiável · Gerar processo com navegação
+                  · Modelagem guiada removida
+   ========================================================================= */
+
+/* =========================================================================
+   1) MENU DE CONTEXTO
+   Causa do defeito: o menu era montado por um caminho e ampliado por outro,
+   que reatribuía innerHTML — o navegador descarta os nós antigos e, com eles,
+   os tratadores de clique. Só o último trecho ligado continuava funcionando.
+   Correção: um único ponto monta e liga, sempre, para qualquer alvo.
+   ========================================================================= */
+
+/* monta o conteúdo do menu conforme o alvo, sem ligar nada ainda */
+function montarConteudoCtx(alvoId, extra){
+  const o=alvoId?byId(alvoId):null;
+  let h='';
+
+  /* ---------- área vazia ---------- */
+  if(!o){
+    h+=_titulo('Nesta página');
+    h+=_mi('colar','Colar','Ctrl+V',{ico:'⎘', off:!(clipboard&&clipboard.nodes&&clipboard.nodes.length)});
+    h+=_mi('colarAqui','Colar aqui','',{ico:'⎘', off:!(clipboard&&clipboard.nodes&&clipboard.nodes.length)});
+    h+=_mi('colarImagem','Colar imagem copiada','',{ico:'🖼'});
+    h+=_sep;
+    h+=_mi('addTarefa','Nova tarefa','',{ico:'▭'});
+    h+=_mi('addImagem','Inserir imagem…','Ctrl+Shift+I',{ico:'🖼'});
+    h+=_mi('addTabela','Inserir tabela…','Ctrl+Shift+T',{ico:'▦'});
+    h+=_mi('agrupar','Agrupar por área','G',{ico:'⬚'});
+    h+=_sep;
+    h+=_mi('selTudo','Selecionar tudo','Ctrl+A',{ico:'▣'});
+    h+=_mi('autoLayout','Reorganizar automaticamente','',{ico:'⇄'});
+    h+=_mi('arrumarSetas','Arrumar as setas','Ctrl+L',{ico:'⌁'});
+    h+=_mi('proporConexoes','Propor conexões','',{ico:'⇢'});
+    h+=_sep;
+    h+=_mi('ajustar','Ajustar à tela','Ctrl+0',{ico:'⤢'});
+    h+=_mi('paleta','Paleta do desenho…','Ctrl+Shift+P',{ico:'◑'});
+    h+=_mi('novoDesenho','Novo desenho…','Ctrl+N',{ico:'✦'});
+    return h;
+  }
+
+  /* ---------- seta ---------- */
+  if(o.source){
+    h+=_titulo(EDGE_T[o.type]?EDGE_T[o.type].label:'Conexão');
+    h+=_mi('editarRotulo','Editar rótulo','F2',{ico:'✎'});
+    h+=_mi('endireitar','Endireitar','',{ico:'⌁'});
+    h+=_mi('limparDobras','Limpar dobras','',{ico:'◌'});
+    h+=_mi('inverter','Inverter sentido','',{ico:'⇄'});
+    h+=_sep;
+    h+=_titulo('Tipo de fluxo');
+    Object.keys(EDGE_T).forEach(k=>{
+      h+=`<button class="ctx-i ${o.type===k?'on':''}" data-ctx="tipoSeta:${k}">`
+        +`<span class="ctx-ico">${o.type===k?'✓':''}</span>`
+        +`<span class="ctx-txt">${esc(EDGE_T[k].label)}</span></button>`;
+    });
+    h+=_sep;
+    h+=_mi('copiarFmt','Copiar formatação','Ctrl+Shift+C',{ico:'🖌'});
+    h+=_mi('colarFmt','Aplicar formatação','Ctrl+Shift+V',{ico:'⇩', off:!pincel});
+    h+=_mi('comentar','Comentar…','Ctrl+Shift+M',{ico:'💬'});
+    h+=_sep;
+    h+=_mi('excluir','Excluir','Del',{ico:'🗑', perigo:true});
+    return h;
+  }
+
+  /* ---------- piscina ---------- */
+  if(o.lanes){
+    h+=_titulo('Piscina · '+(o.name||''));
+    h+=_mi('editarRotulo','Renomear','F2',{ico:'✎'});
+    h+=_mi('addRaia','Adicionar raia','',{ico:'＋'});
+    h+=_sep;
+    h+=_titulo('Orientação');
+    [['h','Horizontal'],['v','Vertical'],['mix','Mista (matriz)']].forEach(([k,r])=>{
+      h+=`<button class="ctx-i ${(o.orient||'h')===k?'on':''}" data-ctx="orient:${k}">`
+        +`<span class="ctx-ico">${(o.orient||'h')===k?'✓':''}</span>`
+        +`<span class="ctx-txt">${esc(r)}</span></button>`;
+    });
+    h+=_sep;
+    h+=_mi('excluir','Excluir piscina','Del',{ico:'🗑', perigo:true});
+    return h;
+  }
+
+  /* ---------- elemento ---------- */
+  const varios=selection.size>1;
+  const ehTabela=o.type==='table';
+  const cel=extra && extra.cel;
+  h+=_titulo(varios?`${selection.size} itens selecionados`:(o.name||(T[o.type]?T[o.type].label:'Elemento')));
+
+  if(ehTabela && cel){
+    h+=_titulo('Célula '+(cel.r+1)+'×'+(cel.c+1));
+    h+=_mi('celEditar','Editar célula','Enter',{ico:'✎'});
+    h+=_mi('celLimpar','Limpar conteúdo','',{ico:'◌'});
+    h+=_sep;
+    h+=_mi('linAcima','Inserir linha acima','',{ico:'⤒'});
+    h+=_mi('linAbaixo','Inserir linha abaixo','',{ico:'⤓'});
+    h+=_mi('colEsq','Inserir coluna à esquerda','',{ico:'⇤'});
+    h+=_mi('colDir','Inserir coluna à direita','',{ico:'⇥'});
+    h+=_sep;
+    h+=_mi('delLinha','Excluir esta linha','',{ico:'✕', perigo:true});
+    h+=_mi('delColuna','Excluir esta coluna','',{ico:'✕', perigo:true});
+    h+=_sep;
+  } else {
+    h+=_mi('editarRotulo','Renomear','F2',{ico:'✎'});
+  }
+  h+=_mi('recortar','Recortar','Ctrl+X',{ico:'✂'});
+  h+=_mi('copiar','Copiar','Ctrl+C',{ico:'⧉'});
+  h+=_mi('duplicar','Duplicar','Ctrl+D',{ico:'⧉'});
+  h+=_sep;
+  h+=_titulo('Camada');
+  h+=_mi('frente','Trazer para a frente','Ctrl+Shift+↑',{ico:'⤒'});
+  h+=_mi('avancar','Avançar uma','Ctrl+↑',{ico:'↑'});
+  h+=_mi('recuar','Recuar uma','Ctrl+↓',{ico:'↓'});
+  h+=_mi('tras','Enviar para trás','Ctrl+Shift+↓',{ico:'⤓'});
+
+  if(selNodes().filter(x=>!x.lanes).length>1){
+    h+=_sep;
+    h+=_titulo('Alinhar');
+    h+=`<div class="ctx-linha">
+      <button class="ctx-b" data-ctx="al:left" title="À esquerda">⇤</button>
+      <button class="ctx-b" data-ctx="al:hcenter" title="Centro horizontal">⇹</button>
+      <button class="ctx-b" data-ctx="al:right" title="À direita">⇥</button>
+      <button class="ctx-b" data-ctx="al:top" title="Ao topo">⤒</button>
+      <button class="ctx-b" data-ctx="al:vcenter" title="Centro vertical">⇳</button>
+      <button class="ctx-b" data-ctx="al:bottom" title="À base">⤓</button>
+      <button class="ctx-b" data-ctx="al:hdist" title="Distribuir">⋯</button>
+    </div>`;
+  }
+  h+=_sep;
+  h+=_mi('copiarFmt','Copiar formatação','Ctrl+Shift+C',{ico:'🖌'});
+  h+=_mi('colarFmt','Aplicar formatação','Ctrl+Shift+V',{ico:'⇩', off:!pincel});
+
+  /* converter: agora cobre todas as atividades e eventos, não só cinco */
+  if(!varios && T[o.type]){
+    const cat=T[o.type].cat;
+    const fam=T[o.type].fam||'bpmn';
+    if(fam==='bpmn' && ['activity','gateway','event'].includes(cat)){
+      const opcoes=tiposParaConversao(o);
+      if(opcoes.length){
+        h+=_sep;
+        h+=_titulo('Converter para');
+        opcoes.forEach(k=>{
+          h+=`<button class="ctx-i" data-ctx="conv:${k}">`
+            +`<span class="ctx-ico">${iconeMini(k)}</span>`
+            +`<span class="ctx-txt">${esc(T[k].label)}</span></button>`;
+        });
+      }
+    }
+  }
+  h+=_sep;
+  h+=_mi('anexarPrint','Anexar print…','',{ico:'🖼'});
+  h+=_mi('comentar','Comentar…','Ctrl+Shift+M',{ico:'💬'});
+  h+=_sep;
+  h+=_mi('excluir', varios?`Excluir ${selection.size} itens`:'Excluir','Del',{ico:'🗑', perigo:true});
+  return h;
+}
+/* quais tipos fazem sentido para converter, dado o elemento atual */
+function tiposParaConversao(o){
+  const cat=T[o.type].cat;
+  const grupos={
+    activity:['userTask','systemTask','serviceTask','manualTask','sendTask','receiveTask',
+              'businessRuleTask','scriptTask','subProcess','callActivity','exclusiveGateway'],
+    gateway:['exclusiveGateway','parallelGateway','inclusiveGateway','eventGateway','userTask'],
+    event:['startEvent','startMessage','startTimer','intermediateEvent','intermediateTimer',
+           'intermediateMessage','endEvent','endError','endTerminate']
+  };
+  return (grupos[cat]||[]).filter(k=>k!==o.type && T[k]);
+}
+/* símbolo curto para a lista de conversão */
+function iconeMini(tipo){
+  const cat=T[tipo]?T[tipo].cat:'';
+  if(cat==='gateway') return '◇';
+  if(cat==='event') return '○';
+  if(tipo==='serviceTask'||tipo==='scriptTask') return '⚙';
+  if(tipo==='sendTask') return '✉';
+  if(tipo==='receiveTask') return '✉';
+  if(tipo==='manualTask') return '✋';
+  if(tipo==='subProcess'||tipo==='callActivity') return '⊞';
+  if(tipo==='businessRuleTask') return '▤';
+  return '▭';
+}
+
+/* monta, posiciona e liga — tudo num lugar só */
+function abrirCtx(ev, alvoId, extra){
+  const m=$('#ctxMenu'); if(!m) return;
+  ctxAlvo={id:alvoId, pos:evtPos(ev), cel:extra&&extra.cel};
+
+  m.innerHTML = montarConteudoCtx(alvoId, extra);
+  m.classList.add('show');
+
+  /* posiciona sem sair da tela */
+  const wrap=$('#canvasWrap'), r=$('#svgHost').getBoundingClientRect();
+  let x=ev.clientX-r.left+2, y=ev.clientY-r.top+2;
+  const mw=m.offsetWidth||250, mh=m.offsetHeight||300;
+  if(x+mw>wrap.clientWidth-8) x=Math.max(8, x-mw-4);
+  if(y+mh>wrap.clientHeight-8) y=Math.max(8, wrap.clientHeight-mh-8);
+  m.style.left=x+'px'; m.style.top=y+'px';
+
+  ligarItensCtx();
+}
+/* liga todos os itens do menu — chamado depois de qualquer montagem */
+function ligarItensCtx(){
+  const m=$('#ctxMenu'); if(!m) return 0;
+  const itens=m.querySelectorAll('[data-ctx]')||[];
+  let n=0;
+  itens.forEach(b=>{
+    if(b.disabled) return;
+    b.onclick=(e)=>{
+      if(e && e.preventDefault) e.preventDefault();
+      const a=b.dataset.ctx;
+      /* fecharCtx zera ctxAlvo: guarda o alvo ANTES de fechar o menu,
+         senão a ação perde a referência do elemento clicado */
+      const alvoGuardado = ctxAlvo ? {id:ctxAlvo.id, pos:ctxAlvo.pos, cel:ctxAlvo.cel} : null;
+      fecharCtx();
+      ctxAlvo = alvoGuardado;
+      try{ execCtx(a); }
+      catch(err){ console.error('ação do menu:',a,err); toast('Não foi possível executar: '+a,'err'); }
+      finally{ ctxAlvo=null; }
+    };
+    n++;
+  });
+  return n;
+}
+
+/* execCtx único, cobrindo todas as ações do menu */
+function execCtx(acao){
+  const alvo=ctxAlvo||{};
+  const o=alvo.id?byId(alvo.id):null;
+  const p=alvo.pos||ultimoMouse||{x:200,y:200};
+  const [cmd,arg]=String(acao).split(':');
+
+  if(cmd==='al'){ alinhar(arg); return; }
+  if(cmd==='conv'&&o){ pedirConversao(o, arg); return; }
+  if(cmd==='tipoSeta'&&o){ o.type=arg; pushHistory(); render(); renderProps(); return; }
+  if(cmd==='orient'&&o){ trocarOrientacao(o, arg); return; }
+
+  switch(acao){
+    /* ---- canvas ---- */
+    case 'colar': colar(); break;
+    case 'colarAqui': colar(p); break;
+    case 'colarImagem':
+      if(typeof colarImagemDaAreaTransferencia==='function') colarImagemDaAreaTransferencia(p);
+      break;
+    case 'addTarefa': addNode('task', p.x, p.y); break;
+    case 'addImagem': escolherImagem(p); break;
+    case 'addTabela': modalNovaTabela(p); break;
+    case 'agrupar': ativarModoGrupo(); break;
+    case 'selTudo': selecionarTudo(); break;
+    case 'autoLayout': { autoLayout(model); ajustarPiscina(); pushHistory(); render(); fit();
+      toast('Desenho reorganizado','ok'); break; }
+    case 'arrumarSetas': { const r=arrumarConexoes(14); pushHistory(); render();
+      toast(`${r.retas} seta(s) endireitada(s)`,'ok'); break; }
+    case 'proporConexoes':
+      if(typeof proporConexoes==='function') proporConexoes();
+      break;
+    case 'ajustar': fit(); break;
+    case 'paleta': modalTemas(); break;
+    case 'novoDesenho': if(typeof modalNovo==='function') modalNovo(); break;
+    case 'marca': if(typeof modalMarca==='function') modalMarca(); break;
+
+    /* ---- elemento e seta ---- */
+    case 'editarRotulo': if(o) editLabel(o.id); break;
+    case 'endireitar': if(o){ endireitarConexao(o,'destino'); pushHistory(); render(); renderProps(); } break;
+    case 'limparDobras': if(o){ o.waypoints=[]; o.srcPort=''; o.tgtPort=''; pushHistory(); render(); } break;
+    case 'inverter': if(o){ const a=o.source;o.source=o.target;o.target=a;
+      const q=o.srcPort;o.srcPort=o.tgtPort;o.tgtPort=q;(o.waypoints||[]).reverse();
+      pushHistory(); render(); renderProps(); } break;
+    case 'addRaia': if(o&&o.lanes){ o.lanes.push({id:nid('lane'),name:'Nova raia',h:150,w:250});
+      ajustarMedidaPiscina(o); pushHistory(); render(); renderProps(); } break;
+
+    case 'recortar': copiarSelecao(true); break;
+    case 'copiar': copiarSelecao(false); break;
+    case 'duplicar': duplicarSelecao(); break;
+    case 'frente': trazerParaFrente(); break;
+    case 'avancar': avancarUma(); break;
+    case 'recuar': recuarUma(); break;
+    case 'tras': enviarParaTras(); break;
+    case 'copiarFmt': if(o) copiarFormato(o); break;
+    case 'colarFmt': { const itens=[...selection].map(id=>byId(id)).filter(Boolean);
+      if(itens.length) colarFormato(itens); break; }
+    case 'anexarPrint': if(o) escolherImagem({x:o.x+o.w/2, y:o.y+o.h+150}, o.id); break;
+    case 'comentar': if(o){
+      if(!revisao.ativo) alternarRevisao();
+      if(!revisao.autor) modalAutor(()=>abrirBalao(o.id,true)); else abrirBalao(o.id,true);
+    } break;
+    case 'excluir': removerSelecao(); break;
+
+    /* ---- tabela ---- */
+    case 'celEditar': if(o&&alvo.cel) editarCelula(o.id, alvo.cel.r, alvo.cel.c); break;
+    case 'celLimpar': if(o&&alvo.cel){ o.celulas[alvo.cel.r][alvo.cel.c]=''; pushHistory(); render(); } break;
+    case 'linAcima': if(o&&alvo.cel) tabelaAddLinha(o, alvo.cel.r-1); break;
+    case 'linAbaixo': if(o&&alvo.cel) tabelaAddLinha(o, alvo.cel.r); break;
+    case 'colEsq': if(o&&alvo.cel) tabelaAddColuna(o, alvo.cel.c-1); break;
+    case 'colDir': if(o&&alvo.cel) tabelaAddColuna(o, alvo.cel.c); break;
+    case 'delLinha': if(o&&alvo.cel) tabelaDelLinha(o, alvo.cel.r); break;
+    case 'delColuna': if(o&&alvo.cel) tabelaDelColuna(o, alvo.cel.c); break;
+
+    default:
+      console.warn('ação do menu não reconhecida:', acao);
+      toast('Ação não reconhecida: '+acao,'err');
+  }
+}
+
+/* =========================================================================
+   2) GERAR PROCESSO — botões que funcionam e navegação lateral
+   ========================================================================= */
+/* garante que a documentação exista antes de qualquer download */
+function assegurarDoc(){
+  const alvo=$('#docOut');
+  if(!alvo) return false;
+  const vazio = !alvo.innerHTML || !/docBody/.test(alvo.innerHTML);
+  if(vazio) gerarDoc();
+  return /docBody/.test($('#docOut').innerHTML||'');
+}
+function baixarDocWord(){
+  if(!assegurarDoc()){ toast('Não há diagrama para documentar','err'); return false; }
+  const h=docParaArquivo();
+  if(!h){ toast('Não foi possível montar o documento','err'); return false; }
+  baixar(nomeArq('doc'), h, 'application/msword');
+  toast('Documento Word baixado','ok');
+  return true;
+}
+function baixarDocHTML(){
+  if(!assegurarDoc()){ toast('Não há diagrama para documentar','err'); return false; }
+  const h=docParaArquivo();
+  if(!h){ toast('Não foi possível montar o documento','err'); return false; }
+  baixar('Documentacao_'+nomeArq('html'), h, 'text/html;charset=utf-8');
+  toast('Documentação em HTML baixada','ok');
+  return true;
+}
+function baixarDocPDF(){
+  if(!assegurarDoc()){ toast('Não há diagrama para documentar','err'); return false; }
+  imprimirDoc();
+  return true;
+}
+function imprimirDoc(){
+  if(!assegurarDoc()){ toast('Não há diagrama para documentar','err'); return false; }
+  const h=docParaArquivo();
+  if(!h) return false;
+  try{
+    const w=window.open('','_blank');
+    if(w){
+      w.document.write(h);
+      w.document.close();
+      setTimeout(()=>{ try{ w.print(); }catch(e){} }, 400);
+      return true;
+    }
+  }catch(e){}
+  /* sem janela nova: imprime a própria página */
+  try{ window.print(); return true; }catch(e){}
+  toast('O navegador bloqueou a impressão — baixe em Word ou HTML','err');
+  return false;
+}
+
+/* ---------- sumário lateral ---------- */
+function montarSumarioDoc(){
+  const out=$('#docOut');
+  if(!out) return;
+  const corpo=out.querySelector ? out.querySelector('#docBody') : null;
+  const html=out.innerHTML||'';
+  if(!/docBody/.test(html)){ const s=$('#docSum'); if(s) s.innerHTML=''; return; }
+
+  /* extrai os títulos do documento gerado */
+  const titulos=[];
+  const re=/<(h[123])[^>]*>([\s\S]*?)<\/\1>/g;
+  let m, i=0;
+  while((m=re.exec(html))){
+    const nivel=+m[1][1];
+    const texto=m[2].replace(/<[^>]+>/g,'').replace(/\s+/g,' ').trim();
+    if(!texto) continue;
+    if(nivel===1 && i>0) continue;           /* o título do processo entra uma vez */
+    titulos.push({nivel, texto, id:'sec_'+(i++)});
+  }
+  /* insere âncoras no documento */
+  let k=0;
+  const comAncoras=html.replace(/<(h[123])([^>]*)>/g, (todo, tag, attrs)=>{
+    const t=titulos[k];
+    if(!t){ return todo; }
+    /* só ancora se for o título que catalogamos */
+    const id=t.id; k++;
+    return `<${tag}${attrs} id="${id}">`;
+  });
+  if(k>0) out.innerHTML=comAncoras;
+
+  const sum=$('#docSum');
+  if(!sum) return;
+  if(titulos.length<2){ sum.innerHTML=''; sum.classList.remove('show'); return; }
+  sum.classList.add('show');
+  sum.innerHTML=`
+    <div class="dsum-t">Neste documento</div>
+    <div class="dsum-l">
+      ${titulos.map((t,j)=>`
+        <button class="dsum-i n${t.nivel} ${j===0?'on':''}" data-sec="${t.id}">
+          <span>${esc(t.texto)}</span>
+        </button>`).join('')}
+    </div>`;
+  (sum.querySelectorAll('[data-sec]')||[]).forEach(b=>{
+    b.onclick=()=>{
+      const el=$('#'+b.dataset.sec) || (out.querySelector && out.querySelector('#'+b.dataset.sec));
+      if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
+      (sum.querySelectorAll('[data-sec]')||[]).forEach(x=>x.classList.toggle('on', x===b));
+    };
+  });
+}
+
+/* a geração passa a montar o sumário logo depois */
+const _gerarDocBase = gerarDoc;
+function gerarDocComSumario(){
+  const r=_gerarDocBase.apply(this, arguments);
+  try{ montarSumarioDoc(); }catch(e){}
+  try{ atualizarBotoesDoc(); }catch(e){}
+  return r;
+}
+/* habilita ou desabilita os botões conforme haja documento */
+function atualizarBotoesDoc(){
+  const temDoc = /docBody/.test(($('#docOut')||{}).innerHTML||'');
+  ['pgWord','pgHtml','pgPrint','pgPdf'].forEach(id=>{
+    const b=$('#'+id);
+    if(!b) return;
+    b.disabled=!temDoc;
+    if(b.classList) b.classList.toggle('off', !temDoc);
+    b.title = temDoc ? '' : 'Gere a documentação primeiro';
+  });
+}
+
+/* =========================================================================
+   3) A TELA DE GERAR PROCESSO, REORGANIZADA
+   ========================================================================= */
+function montarTelaProcesso(){
+  const view=$('#view-processo');
+  if(!view || view.dataset.v37) return;
+  view.dataset.v37='1';
+  view.innerHTML=`
+    <div class="proc2">
+      <div class="proc2-cab">
+        <h2>Gerar processo</h2>
+        <div class="proc2-acoes">
+          <label class="proc2-chk">
+            <input type="checkbox" id="pgIncDiag" checked> incluir o desenho
+          </label>
+          <button class="btn primary sm" id="pgGerar">▦ Gerar documentação</button>
+          <span class="proc2-sep"></span>
+          <button class="btn sm" id="pgWord" disabled>⤓ Word</button>
+          <button class="btn sm" id="pgHtml" disabled>⤓ HTML</button>
+          <button class="btn sm" id="pgPrint" disabled>⎙ Imprimir · PDF</button>
+        </div>
+      </div>
+      <div class="proc2-corpo">
+        <aside class="proc2-sum" id="docSum"></aside>
+        <div class="proc2-doc" id="docOut">
+          <div class="empty">Clique em <b>Gerar documentação</b> para produzir a ficha do processo,
+            a tabela de atividades, a narrativa e os indicadores.</div>
+        </div>
+      </div>
+    </div>`;
+  ligarTelaProcesso();
+}
+function ligarTelaProcesso(){
+  const g=id=>$('#'+id);
+  if(g('pgGerar')) g('pgGerar').onclick=()=>{ gerarDoc(); };
+  if(g('pgWord')) g('pgWord').onclick=baixarDocWord;
+  if(g('pgHtml')) g('pgHtml').onclick=baixarDocHTML;
+  if(g('pgPrint')) g('pgPrint').onclick=imprimirDoc;
+  const cx=g('pgIncDiag');
+  if(cx) cx.onchange=()=>{ if(/docBody/.test((g('docOut')||{}).innerHTML||'')) gerarDoc(); };
+  atualizarBotoesDoc();
+}
+
+/* =========================================================================
+   4) MODELAGEM GUIADA — removida da navegação
+   As funções continuam no arquivo, para não quebrar nada que dependa delas;
+   apenas a área deixa de ser oferecida.
+   ========================================================================= */
+function removerModelagemGuiada(){
+  /* tira do menu de navegação */
+  ['[data-view="estruturado"]','[data-nav="estruturado"]'].forEach(sel=>{
+    (document.querySelectorAll(sel)||[]).forEach(b=>{
+      if(b && b.remove) b.remove();
+      else if(b && b.style) b.style.display='none';
+    });
+  });
+  /* esconde a área */
+  const v=$('#view-estruturado');
+  if(v && v.style) v.style.display='none';
+  /* se estiver aberta, leva para a modelagem livre */
+  try{
+    if(v && v.classList && v.classList.contains('active')) irPara('modelar');
+  }catch(e){}
+}
+
+/* =========================================================================
+   5) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  /* ---------- gerar processo ---------- */
+  .proc2{max-width:1240px;margin:0 auto;padding:14px 20px 20px}
+  .proc2-cab{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+  .proc2-cab h2{margin:0;font-size:16px;font-weight:800}
+  .proc2-acoes{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
+  .proc2-chk{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--txt2);
+    cursor:pointer;white-space:nowrap}
+  .proc2-sep{width:1px;height:20px;background:var(--line);margin:0 3px}
+  .proc2-acoes .btn.off{opacity:.45;cursor:not-allowed}
+  .proc2-corpo{display:grid;grid-template-columns:224px 1fr;gap:14px;align-items:start}
+  .proc2-sum{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:11px 10px;position:sticky;top:14px;max-height:calc(100vh - 150px);overflow-y:auto}
+  .proc2-sum:empty{display:none}
+  .dsum-t{font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+    color:var(--txt3);margin-bottom:8px;padding:0 4px}
+  .dsum-l{display:flex;flex-direction:column;gap:1px}
+  .dsum-i{display:block;width:100%;border:0;background:transparent;text-align:left;
+    cursor:pointer;padding:6px 8px;border-radius:6px;font-size:11.5px;color:var(--txt2);
+    line-height:1.35;border-left:2px solid transparent}
+  .dsum-i:hover{background:var(--musgo-0);color:var(--acao)}
+  .dsum-i.on{background:var(--musgo-0);color:var(--acao);border-left-color:var(--acao);font-weight:700}
+  .dsum-i.n1{font-weight:800;font-size:12px;color:var(--txt)}
+  .dsum-i.n2{padding-left:10px}
+  .dsum-i.n3{padding-left:20px;font-size:11px;color:var(--txt3)}
+  .dsum-i span{display:block;overflow:hidden;text-overflow:ellipsis;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .proc2-doc{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:20px 24px;min-height:400px;overflow-x:auto}
+  .proc2-doc .empty{padding:60px 20px;text-align:center;color:var(--txt3);font-size:13px;line-height:1.6}
+  .proc2-doc h1{font-size:20px;margin:0 0 6px;scroll-margin-top:20px}
+  .proc2-doc h2{font-size:15px;color:var(--acao);border-bottom:2px solid var(--acao);
+    padding-bottom:5px;margin:26px 0 10px;scroll-margin-top:20px}
+  .proc2-doc h3{font-size:13px;margin:16px 0 7px;scroll-margin-top:20px}
+  .proc2-doc svg{max-width:100%;height:auto}
+  @media(max-width:1000px){
+    .proc2-corpo{grid-template-columns:1fr}
+    .proc2-sum{position:static;max-height:none}
+  }
+  /* ---------- menu de contexto: mais legível ---------- */
+  #ctxMenu{max-height:min(72vh,620px);overflow-y:auto}
+  #ctxMenu .ctx-i{white-space:nowrap}
+  `;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   6) ARRANQUE
+   ========================================================================= */
+gerarDoc=gerarDocComSumario;
+
+function initV37(){
+  montarTelaProcesso();
+  removerModelagemGuiada();
+  atualizarBotoesDoc();
+  /* ao entrar na área, garante que a tela esteja montada e ligada */
+  const _ir=irPara;
+  if(typeof _ir==='function' && !_ir._v37){
+    const novo=function(v){
+      if(v==='estruturado') v='modelar';      /* a área foi retirada */
+      const r=_ir.apply(this, [v]);
+      setTimeout(()=>{
+        try{
+          if(v==='processo'){ montarTelaProcesso(); ligarTelaProcesso(); }
+        }catch(e){}
+      }, 40);
+      return r;
+    };
+    novo._v37=true;
+    irPara=novo;
+  }
+}
+(function(){
+  function arrancar(){ try{ initV37(); }catch(e){} }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,560));
+  else setTimeout(arrancar,560);
 })();
 
 </script>
