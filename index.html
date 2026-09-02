@@ -15316,20 +15316,40 @@ function mandarPor(t, e){
 /* junção: quando todos os ramos chegaram, um único token segue */
 function tentarSincronizar(){
   let destravou=false;
+  /* só age quando há token efetivamente aguardando */
+  if(!sim.tokens.some(t=>t.vivo && t.esperando)) return false;
   const porNo={};
-  sim.tokens.filter(t=>t.vivo && t.esperando).forEach(t=>{
+  /* Conta TODOS os tokens parados na junção, não apenas os já marcados como
+     esperando: os tokens são processados um por passo, então o segundo chega
+     depois de o primeiro já estar aguardando. Contar só os marcados fazia a
+     junção nunca fechar. */
+  sim.tokens.filter(t=>t.vivo && !t.edge).forEach(t=>{
+    const n=nodeById(t.no);
+    if(!n || n.type!=='parallelGateway') return;
+    if(entradasSim(t.no).length<2) return;
     (porNo[t.no]=porNo[t.no]||[]).push(t);
   });
   Object.keys(porNo).forEach(id=>{
     const n=nodeById(id); if(!n) return;
     const precisa=entradasSim(id).length;
     const chegaram=porNo[id].length;
-    if(chegaram>=precisa && precisa>1){
-      /* funde os tokens num só */
+    /* Quantos ramos ainda podem chegar? Se os que faltam já morreram,
+       a junção fecha com o que tem — senão o fluxo travaria para sempre. */
+    const aindaVem=sim.tokens.filter(t=>t.vivo && t.no!==id &&
+      (t.edge ? (edgeById(t.edge)||{}).target===id : false)).length;
+    if(chegaram>=precisa || aindaVem===0){
       const sobrevivente=porNo[id][0];
       porNo[id].slice(1).forEach(x=>{ x.vivo=false; });
       sobrevivente.esperando=false;
-      registrarHistorico('⑃ Sincronizado: '+chegaram+' caminhos viraram um','ramo', id);
+      /* segue adiante: liberar sem mandar deixaria o token parado no mesmo lugar */
+      const saidas=saidasSim(id);
+      if(saidas.length){
+        registrarHistorico('⑃ Sincronizado: '+chegaram+' caminho(s) viraram um','ramo', id);
+        mandarPor(sobrevivente, saidas[0].e);
+      } else {
+        sobrevivente.vivo=false;
+        registrarHistorico('⚠ Junção sem saída — o caminho morre aqui','err', id);
+      }
       destravou=true;
     }
   });
@@ -16869,11 +16889,23 @@ function passoSimulacao(){
       return;
     }
 
-    /* junção paralela: espera os outros */
+    /* junção paralela: espera os demais ramos */
     if(n.type==='parallelGateway' && entradasSim(t.no).length>1){
-      t.esperando=true;
-      registrarHistorico('⑃ Aguardando sincronização em "'+(n.name||'Paralelo')+'"','espera', n.id);
-      tentarSincronizar();
+      const irmaos=sim.tokens.filter(x=>x.vivo && x.no===t.no && !x.edge).length;
+      const precisa=entradasSim(t.no).length;
+      const emTransito=sim.tokens.filter(x=>x.vivo && x.edge &&
+        (edgeById(x.edge)||{}).target===t.no).length;
+      if(irmaos>=precisa || emTransito===0){
+        /* todos chegaram (ou os que faltam já morreram): funde e segue */
+        sim.tokens.filter(x=>x.vivo && x.no===t.no && x!==t && !x.edge)
+          .forEach(x=>{ x.vivo=false; });
+        t.esperando=false;
+        registrarHistorico('⑃ Sincronizado: '+irmaos+' caminho(s) viraram um','ramo', n.id);
+        mandarPor(t, outs[0].e);
+      } else {
+        t.esperando=true;
+        registrarHistorico('⑃ Aguardando sincronização em "'+(n.name||'Paralelo')+'"','espera', n.id);
+      }
       return;
     }
 
