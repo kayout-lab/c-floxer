@@ -20874,4 +20874,839 @@ function agruparConversaoVazia(m, o){
 
 </script>
 
+<script>
+/* =========================================================================
+   C-Floxer v35 — Exportação e documentação com todas as páginas
+   1) A documentação passa a cobrir o projeto inteiro
+   2) A tela de exportação ganha prévia do resultado
+   3) Escolha do escopo: página aberta, todas juntas, todas separadas, ou seleção
+   ========================================================================= */
+
+/* =========================================================================
+   1) ESCOPO DE PÁGINAS
+   ========================================================================= */
+let escopoExp = {
+  modo:'atual',        /* atual | todas | separadas | selecao */
+  selecao:{},          /* índice -> true */
+  incluirCapa:true     /* capa por página nos formatos que suportam */
+};
+
+/* lista das páginas, sempre sincronizada com o estado vivo */
+function listaPaginas(){
+  garantirPaginas();
+  salvarPaginaAtual();
+  return model.paginas.map((p,i)=>({
+    i, id:p.id, nome:p.nome||('Página '+(i+1)),
+    nodes:(p.nodes||[]).length,
+    edges:(p.edges||[]).length,
+    pools:(p.pools||[]).length,
+    atual:i===model.paginaAtual,
+    vazia:!(p.nodes||[]).length && !(p.pools||[]).length
+  }));
+}
+/* quais páginas entram na exportação, conforme o modo escolhido */
+function paginasDoEscopo(){
+  const todas=listaPaginas();
+  if(escopoExp.modo==='atual') return todas.filter(p=>p.atual);
+  if(escopoExp.modo==='selecao'){
+    const sel=todas.filter(p=>escopoExp.selecao[p.i]);
+    return sel.length?sel:todas.filter(p=>p.atual);
+  }
+  return todas.filter(p=>!p.vazia);      /* todas e separadas ignoram vazias */
+}
+/* executa uma função com a página i carregada, e devolve ao estado anterior */
+function comPagina(i, fn){
+  garantirPaginas();
+  const antes=model.paginaAtual;
+  salvarPaginaAtual();
+  const p=model.paginas[i];
+  if(!p) return null;
+  const guarda={nodes:model.nodes, edges:model.edges, pools:model.pools, comentarios:model.comentarios};
+  model.nodes=p.nodes||[]; model.edges=p.edges||[]; model.pools=p.pools||[];
+  model.comentarios=p.comentarios||[];
+  let r=null;
+  try{ r=fn(p, i); }
+  finally{
+    model.nodes=guarda.nodes; model.edges=guarda.edges;
+    model.pools=guarda.pools; model.comentarios=guarda.comentarios;
+    model.paginaAtual=antes;
+  }
+  return r;
+}
+/* junta todas as páginas do escopo num único modelo, empilhadas na vertical */
+function modeloUnificado(paginas, opts){
+  opts=opts||{};
+  const GAP=opts.gap!=null?opts.gap:220;
+  const nodes=[], edges=[], pools=[];
+  let deslocY=(opts.separadores!==false)?96:0;   /* espaço para a faixa da 1ª página */
+  const marcadores=[];
+  paginas.forEach((info,k)=>{
+    const p=model.paginas[info.i];
+    if(!p) return;
+    const orig={nodes:p.nodes||[], edges:p.edges||[], pools:p.pools||[]};
+    /* mede o conteúdo desta página */
+    const todos=orig.nodes.concat(orig.pools);
+    if(!todos.length) return;
+    const minX=Math.min(...todos.map(n=>n.x));
+    const minY=Math.min(...todos.map(n=>n.y));
+    const maxY=Math.max(...todos.map(n=>n.y+(n.h||0)));
+    const dy=deslocY-minY;
+    const dx=-minX+80;      /* margem lateral, para nada colar na borda */
+    /* prefixo evita colisão de identificador entre páginas */
+    const pre='p'+info.i+'_';
+    const mapa={};
+    orig.nodes.forEach(n=>{
+      const c=JSON.parse(JSON.stringify(n));
+      mapa[n.id]=pre+n.id; c.id=pre+n.id;
+      c.x=n.x+dx; c.y=n.y+dy;
+      if(c.laneId) c.laneId=pre+c.laneId;
+      nodes.push(c);
+    });
+    orig.pools.forEach(q=>{
+      const c=JSON.parse(JSON.stringify(q));
+      mapa[q.id]=pre+q.id; c.id=pre+q.id;
+      c.x=q.x+dx; c.y=q.y+dy;
+      (c.lanes||[]).forEach(l=>{ l.id=pre+l.id; });
+      pools.push(c);
+    });
+    orig.edges.forEach(e=>{
+      const c=JSON.parse(JSON.stringify(e));
+      c.id=pre+e.id;
+      c.source=mapa[e.source]||e.source;
+      c.target=mapa[e.target]||e.target;
+      if(c.waypoints) c.waypoints=c.waypoints.map(w=>({x:w.x+dx, y:w.y+dy}));
+      edges.push(c);
+    });
+    /* faixa com o nome da página, para separar visualmente */
+    if(opts.separadores!==false){
+      const larg=Math.max(600, Math.max(...todos.map(n=>n.x+(n.w||0)))-minX+160);
+      marcadores.push({
+        id:'sep_'+info.i, type:'shpRet', name:info.nome,
+        x:80, y:deslocY-78, w:larg, h:46,
+        cor:'#3D5142', fundo:'#EEF4F0', fonte:1.15, z:-1
+      });
+    }
+    deslocY = deslocY + (maxY-minY) + GAP;
+  });
+  return {nodes:marcadores.concat(nodes), edges, pools};
+}
+/* roda uma função com o modelo unificado no lugar do vivo */
+function comUnificado(paginas, fn, opts){
+  const u=modeloUnificado(paginas, opts);
+  const guarda={nodes:model.nodes, edges:model.edges, pools:model.pools, comentarios:model.comentarios};
+  model.nodes=u.nodes; model.edges=u.edges; model.pools=u.pools;
+  model.comentarios=[];
+  let r=null;
+  try{ r=fn(u); }
+  finally{
+    model.nodes=guarda.nodes; model.edges=guarda.edges;
+    model.pools=guarda.pools; model.comentarios=guarda.comentarios;
+  }
+  return r;
+}
+/* nome de arquivo com sufixo da página */
+function nomeArqPagina(ext, nomePagina){
+  const base=nomeArq(ext);
+  if(!nomePagina) return base;
+  /* nomes de arquivo aceitam apenas letras, números, hífen e sublinhado:
+     o ponto médio e outros sinais causam problema em alguns sistemas */
+  const limpo=String(nomePagina)
+    .replace(/[·•–—]/g,' ')
+    .replace(/[^\wÀ-ÿ\s-]/g,'')
+    .trim().replace(/\s+/g,'_')
+    .replace(/_+/g,'_').replace(/^_|_$/g,'')
+    .slice(0,40) || 'pagina';
+  return base.replace(new RegExp('\\.'+ext+'$'), '_'+limpo+'.'+ext);
+}
+
+/* =========================================================================
+   2) DOCUMENTAÇÃO COBRINDO TODAS AS PÁGINAS
+   ========================================================================= */
+let docEscopo='projeto';    /* projeto | atual */
+
+/* indicadores somando todas as páginas */
+function kpisProjeto(paginas){
+  let at=0, gw=0, con=0, img=0;
+  const execs=new Set(), sis=new Set();
+  paginas.forEach(info=>comPagina(info.i, ()=>{
+    model.nodes.forEach(n=>{
+      const d=T[n.type]; if(!d) return;
+      if(d.cat==='activity') at++;
+      if(d.cat==='gateway') gw++;
+      if(n.type==='image') img++;
+      const r=respDe(n); if(r&&r!=='—') execs.add(r);
+      if(n.sistema) sis.add(n.sistema);
+    });
+    con+=model.edges.length;
+  }));
+  return {paginas:paginas.length, atividades:at, decisoes:gw, conexoes:con,
+          executores:execs.size, sistemas:sis.size, imagens:img};
+}
+function kpisProjetoHTML(k){
+  const it=[[k.paginas,'Páginas'],[k.atividades,'Atividades'],[k.decisoes,'Decisões'],
+            [k.executores,'Executores'],[k.sistemas,'Sistemas'],[k.conexoes,'Conexões']];
+  return it.map(([v,r])=>`<div><b>${v}</b><span>${esc(r)}</span></div>`).join('');
+}
+/* a documentação passa a percorrer as páginas do escopo */
+function gerarDoc(){
+  garantirPaginas();
+  const todas=listaPaginas().filter(p=>!p.vazia);
+  const escopo = docEscopo==='atual'
+    ? listaPaginas().filter(p=>p.atual)
+    : (todas.length?todas:listaPaginas().filter(p=>p.atual));
+
+  if(!escopo.length || escopo.every(p=>p.vazia)){
+    $('#docOut').innerHTML=`<div class="empty">Não há diagrama. Desenhe na <b>Modelagem livre</b> ou preencha a <b>Modelagem guiada</b> antes de gerar a documentação.</div>`;
+    return;
+  }
+  const m=model.meta;
+  /* apenas o diagrama é opcional; as demais seções sempre entram,
+     como já era o comportamento antes desta versão */
+  const cxDiag=$('#pgIncDiag');
+  const incDiag = cxDiag ? !!cxDiag.checked : true;
+  const incNarr=true, incTab=true, incNGQ=true, incEvid=true, incCmt=true;
+  const k=kpisProjeto(escopo);
+  const varias=escopo.length>1;
+
+  /* sumário quando há várias páginas */
+  const sumario = varias ? `
+    <h2>Conteúdo deste documento</h2>
+    <table><thead><tr><th>#</th><th>Página</th><th style="text-align:center">Elementos</th>
+      <th style="text-align:center">Conexões</th></tr></thead><tbody>
+      ${escopo.map((p,j)=>`<tr><td style="text-align:center">${j+1}</td>
+        <td><b>${esc(p.nome)}</b></td>
+        <td style="text-align:center">${p.nodes+p.pools}</td>
+        <td style="text-align:center">${p.edges}</td></tr>`).join('')}
+    </tbody></table>` : '';
+
+  /* uma seção por página */
+  const secoes = escopo.map((info,j)=>comPagina(info.i, ()=>{
+    const nAt=model.nodes.filter(n=>T[n.type]&&T[n.type].cat==='activity').length;
+    const temFluxo=model.nodes.some(n=>T[n.type]&&(T[n.type].fam||'bpmn')==='bpmn');
+    const tit = varias ? `<h2>${j+1}. ${esc(info.nome)}</h2>` : '';
+    const cab = varias ? `<p class="metaline">${nAt} atividade(s) · ${model.edges.length} conexão(ões)${
+      model.pools.length?' · '+model.pools.length+' piscina(s)':''}</p>` : '';
+    const diag = incDiag && (model.nodes.length||model.pools.length)
+      ? `<div style="overflow:auto;border:1px solid #E3E7F2;border-radius:10px;padding:8px;margin-bottom:10px">
+           ${buildStandaloneSVG(model,{pad:30}).replace('<svg width','<svg style="max-width:100%;height:auto" data-w')}
+         </div>` : '';
+    const narr = incNarr && temFluxo ? `<h3>Como o processo acontece</h3>${narrativaHTML()}` : '';
+    const tab  = incTab  && nAt ? `<h3>Atividades</h3>${tabelaAtividadesHTML()}` : '';
+    const ngq  = incNGQ  && nAt ? `<h3>Maturidade das atividades</h3>${ngqHTML()}` : '';
+    const evid = incEvid ? evidenciasHTML() : '';
+    const cmt  = incCmt  ? comentariosHTML() : '';
+    return tit+cab+diag+narr+tab+ngq+evid+cmt;
+  })).join('');
+
+  $('#docOut').innerHTML=`<div class="doc" id="docBody">
+    <h1>${esc(m.nome||'Processo')}</h1>
+    <p class="metaline">
+      ${[m.area,m.tipo,m.versao?'versão '+m.versao:'',m.data].filter(Boolean).map(esc).join(' · ')}
+      ${varias?` · <b>${escopo.length} páginas</b>`:''}
+    </p>
+    ${m.objetivo?`<p><b>Objetivo.</b> ${esc(m.objetivo)}</p>`:''}
+    ${fichaHTML?fichaHTML():''}
+    <h2>Visão geral</h2>
+    <div class="kpi">${kpisProjetoHTML(k)}</div>
+    ${sumario}
+    ${secoes}
+  </div>`;
+}
+/* ficha do processo, extraída para reuso */
+function fichaHTML(){
+  const m=model.meta;
+  const linhas=[['Área',m.area],['Dono',m.dono],['Gatilho',m.gatilho],
+    ['Entradas',m.entradas],['Saídas',m.saidas],['Cliente',m.cliente],
+    ['Fornecedor',m.fornecedor],['Sistemas',m.sistemas],['Autor',m.autor]]
+    .filter(l=>l[1]);
+  if(!linhas.length) return '';
+  return `<table><tbody>${linhas.map(l=>
+    `<tr><th style="width:170px">${esc(l[0])}</th><td>${esc(l[1])}</td></tr>`).join('')}</tbody></table>`;
+}
+
+/* =========================================================================
+   3) EXPORTAÇÕES COM ESCOPO
+   ========================================================================= */
+/* guarda as funções originais, que exportam a página aberta */
+const _exp1 = {
+  png:exportPNG, svg:exportSVG, pdf:exportPDF, html:exportHTML,
+  bpmn:exportBPMN, vdx:exportVDX, csv:exportCSV, pptx:exportPPTX
+};
+
+/* executa a exportação conforme o escopo escolhido */
+async function exportarComEscopo(formato){
+  const fn=_exp1[formato];
+  if(!fn){ toast('Formato desconhecido','err'); return; }
+  const paginas=paginasDoEscopo();
+
+  /* projeto e documento sempre abrangem tudo, por natureza */
+  if(formato==='vbpm'){ exportVBPM(); return; }
+
+  if(escopoExp.modo==='atual' || paginas.length<=1){
+    return fn();
+  }
+
+  if(escopoExp.modo==='separadas'){
+    toast(`Gerando ${paginas.length} arquivos…`);
+    for(let k=0;k<paginas.length;k++){
+      const info=paginas[k];
+      await new Promise(res=>{
+        comPagina(info.i, ()=>{
+          const _n=nomeArq;
+          nomeArq=(ext)=>nomeArqPagina(ext, info.nome);
+          try{ const r=fn(); if(r&&r.then) r.then(()=>res()); else setTimeout(res, 260); }
+          catch(e){ setTimeout(res, 60); }
+          finally{ setTimeout(()=>{ nomeArq=_n; }, 300); }
+        });
+      });
+    }
+    toast(`${paginas.length} arquivos gerados`,'ok');
+    return;
+  }
+
+  /* todas juntas ou seleção: um arquivo com as páginas empilhadas */
+  const rotulo = escopoExp.modo==='selecao' ? 'selecao' : 'completo';
+  return comUnificado(paginas, ()=>{
+    const _n=nomeArq;
+    nomeArq=(ext)=>nomeArqPagina(ext, rotulo);
+    try{ return fn(); }
+    finally{ setTimeout(()=>{ nomeArq=_n; }, 300); }
+  });
+}
+
+/* o BPMN unificado precisa de tratamento próprio: um processo por página */
+function exportBPMNProjeto(){
+  const paginas=paginasDoEscopo();
+  if(paginas.length<=1) return _exp1.bpmn();
+  const partes=paginas.map(info=>comPagina(info.i, ()=>{
+    const xml=toBPMN();
+    /* extrai apenas o miolo, sem o cabeçalho de definitions */
+    const m=xml.match(/<bpmn:definitions[^>]*>([\s\S]*)<\/bpmn:definitions>/);
+    return {nome:info.nome, corpo:m?m[1]:''};
+  }));
+  const cab=`<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  xmlns:vbpm="http://cfloxer.app/ns"
+  id="Definitions_projeto" targetNamespace="http://cfloxer.app/bpmn"
+  exporter="C-Floxer" exporterVersion="35">
+${partes.map(p=>`  <!-- ${esc(p.nome)} -->${p.corpo}`).join('\n')}
+</bpmn:definitions>`;
+  baixar(nomeArqPagina('bpmn','completo'), cab, 'application/xml;charset=utf-8');
+  toast(`BPMN com ${paginas.length} processos exportado`,'ok');
+}
+
+/* CSV do projeto inteiro, com a coluna de página */
+function exportCSVProjeto(){
+  const paginas=paginasDoEscopo();
+  if(paginas.length<=1) return _exp1.csv();
+  const linhas=[['Página','#','Atividade','Tipo','Raia','Sistema','Descrição',
+                 'Tempo','Volume','Automação','Risco']];
+  paginas.forEach(info=>comPagina(info.i, ()=>{
+    const ord=ordemFluxo();
+    const lista=ord.length?ord:model.nodes;
+    lista.filter(n=>T[n.type]&&['activity','gateway','event'].includes(T[n.type].cat))
+      .forEach((n,j)=>{
+        linhas.push([info.nome, j+1, n.name||'', (T[n.type]||{}).label||n.type,
+          respDe(n)||'', n.sistema||'', n.doc||'', n.tempo||'', n.volume||'',
+          n.N||'', n.risco||'']);
+      });
+  }));
+  const csv='\uFEFF'+linhas.map(l=>l.map(c=>`"${String(c==null?'':c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+  baixar(nomeArqPagina('csv','completo'), csv, 'text/csv;charset=utf-8');
+  toast(`${linhas.length-1} atividade(s) de ${paginas.length} página(s) exportadas`,'ok');
+}
+
+/* PowerPoint com uma seção por página */
+async function exportPPTXProjeto(){
+  const paginas=paginasDoEscopo();
+  if(paginas.length<=1) return _exp1.pptx();
+  /* o gerador percorre o modelo vivo; unifica e deixa que ele trate como um só */
+  return comUnificado(paginas, ()=>{
+    const _n=nomeArq;
+    nomeArq=(ext)=>nomeArqPagina(ext,'completo');
+    try{ return _exp1.pptx(); }
+    finally{ setTimeout(()=>{ nomeArq=_n; }, 300); }
+  }, {gap:400});
+}
+
+/* =========================================================================
+   4) PRÉVIA DA EXPORTAÇÃO
+   ========================================================================= */
+let previaFormato='png';
+const FORMATOS_EXP = [
+  {id:'png',  nome:'Imagem PNG',   ext:'png',  visual:true,  desc:'Imagem do desenho, pronta para colar em documentos'},
+  {id:'svg',  nome:'Vetor SVG',    ext:'svg',  visual:true,  desc:'Desenho vetorial, sem perda de qualidade'},
+  {id:'pdf',  nome:'PDF',          ext:'pdf',  visual:true,  desc:'Documento para distribuição e impressão'},
+  {id:'html', nome:'Página HTML',  ext:'html', visual:false, desc:'Página com o desenho, indicadores e a narrativa'},
+  {id:'bpmn', nome:'BPMN 2.0',     ext:'bpmn', visual:false, desc:'XML padrão, que outras ferramentas abrem'},
+  {id:'vdx',  nome:'Visio',        ext:'vdx',  visual:false, desc:'Formato de intercâmbio do Visio'},
+  {id:'csv',  nome:'Planilha CSV', ext:'csv',  visual:false, desc:'Tabela de atividades para análise'},
+  {id:'pptx', nome:'PowerPoint',   ext:'pptx', visual:false, desc:'Apresentação executiva, um slide por etapa'},
+  {id:'vbpm', nome:'Projeto',      ext:'vbpm', visual:false, desc:'Arquivo mestre — preserva tudo, inclusive páginas'}
+];
+
+/* desenha a prévia conforme o formato e o escopo */
+function renderPrevia(){
+  const cx=$('#expPrevia');
+  if(!cx) return;
+  const paginas=paginasDoEscopo();
+  const fmt=FORMATOS_EXP.find(f=>f.id===previaFormato)||FORMATOS_EXP[0];
+  const varias=paginas.length>1;
+  const unificado = varias && (escopoExp.modo==='todas'||escopoExp.modo==='selecao');
+
+  let corpo='';
+  try{
+    if(fmt.id==='vbpm'){
+      corpo=previaProjeto(paginas);
+    } else if(fmt.visual){
+      corpo=previaVisual(paginas, unificado, fmt);
+    } else if(fmt.id==='csv'){
+      corpo=previaCSV(paginas);
+    } else if(fmt.id==='pptx'){
+      corpo=previaSlides(paginas, unificado);
+    } else if(fmt.id==='html'){
+      corpo=previaHTML(paginas, unificado);
+    } else {
+      corpo=previaTexto(paginas, fmt);
+    }
+  }catch(e){
+    corpo=`<div class="prev-erro">Não foi possível montar a prévia: ${esc(e.message)}</div>`;
+  }
+
+  const arquivos = escopoExp.modo==='separadas' && varias ? paginas.length : 1;
+  cx.innerHTML=`
+    <div class="prev-cab">
+      <div>
+        <b>Prévia · ${esc(fmt.nome)}</b>
+        <span>${arquivos>1?`${arquivos} arquivos`:'1 arquivo'} · ${
+          paginas.length>1?`${paginas.length} páginas`:'1 página'}</span>
+      </div>
+      <span class="prev-ext">.${fmt.ext}</span>
+    </div>
+    <div class="prev-corpo">${corpo}</div>
+    <div class="prev-rod">
+      <span>${esc(fmt.desc)}</span>
+      <button class="btn primary sm" id="prevBaixar">⤓ Exportar</button>
+    </div>`;
+  const b=$('#prevBaixar');
+  if(b) b.onclick=()=>acionarExportacao(fmt.id);
+}
+/* miniatura do desenho, como sairá na imagem */
+function previaVisual(paginas, unificado, fmt){
+  const desenhar=()=> {
+    const b=conteudoBounds(model);
+    if(!b.w||!b.h) return '<div class="prev-vazio">Página sem conteúdo</div>';
+    const svg=buildStandaloneSVG(model,{pad:26, header:fmt.id!=='svg'?false:false});
+    return `<div class="prev-folha">${svg.replace('<svg width','<svg style="max-width:100%;height:auto" data-w')}</div>`;
+  };
+  if(unificado) return comUnificado(paginas, desenhar);
+  if(paginas.length===1) return comPagina(paginas[0].i, desenhar);
+  /* separadas: mostra as primeiras miniaturas */
+  const mostra=paginas.slice(0,4);
+  return `<div class="prev-grade">${mostra.map(info=>comPagina(info.i, ()=>{
+    const b=conteudoBounds(model);
+    const mini = (b.w&&b.h)
+      ? buildStandaloneSVG(model,{pad:20}).replace('<svg width','<svg style="max-width:100%;height:auto" data-w')
+      : '<div class="prev-vazio">vazia</div>';
+    return `<div class="prev-card"><div class="prev-card-t">${esc(info.nome)}</div>
+      <div class="prev-card-d">${mini}</div></div>`;
+  })).join('')}</div>${paginas.length>4?`<div class="prev-mais">e mais ${paginas.length-4} arquivo(s)</div>`:''}`;
+}
+function previaCSV(paginas){
+  const linhas=[];
+  paginas.forEach(info=>comPagina(info.i, ()=>{
+    const ord=ordemFluxo();
+    (ord.length?ord:model.nodes).filter(n=>T[n.type]&&['activity','gateway'].includes(T[n.type].cat))
+      .slice(0,4).forEach((n,j)=>{
+        linhas.push([paginas.length>1?info.nome:String(j+1), n.name||'',
+          (T[n.type]||{}).label||'', respDe(n)||'—', n.sistema||'—']);
+      });
+  }));
+  if(!linhas.length) return '<div class="prev-vazio">Nenhuma atividade para exportar</div>';
+  const cab=paginas.length>1?['Página','Atividade','Tipo','Raia','Sistema']
+                            :['#','Atividade','Tipo','Raia','Sistema'];
+  return `<table class="prev-tab"><thead><tr>${cab.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead>
+    <tbody>${linhas.slice(0,10).map(l=>`<tr>${l.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>
+    ${linhas.length>10?`<div class="prev-mais">e mais ${linhas.length-10} linha(s)</div>`:''}`;
+}
+function previaSlides(paginas, unificado){
+  const etapas=[];
+  paginas.forEach(info=>comPagina(info.i, ()=>{
+    ordemFluxo().filter(n=>T[n.type]&&['activity','gateway'].includes(T[n.type].cat))
+      .forEach(n=>etapas.push({nome:n.name||T[n.type].label, pag:info.nome}));
+  }));
+  const total=3+etapas.length;
+  const mini=(t,s,tipo)=>`<div class="prev-slide ${tipo||''}">
+      <div class="prev-slide-t">${esc(t)}</div>
+      ${s?`<div class="prev-slide-s">${esc(s)}</div>`:''}</div>`;
+  return `<div class="prev-slides">
+      ${mini(model.meta.nome||'Processo','capa','capa')}
+      ${mini('Visão geral','indicadores')}
+      ${mini('Fluxo do processo','desenho')}
+      ${etapas.slice(0,5).map(e=>mini(e.nome, paginas.length>1?e.pag:'etapa')).join('')}
+    </div>
+    <div class="prev-mais">${total} slides no total${etapas.length>5?` · mostrando os 8 primeiros`:''}</div>`;
+}
+function previaHTML(paginas, unificado){
+  const k=kpisProjeto(paginas);
+  return `<div class="prev-html">
+    <div class="prev-html-cab">${esc(model.meta.nome||'Processo')}</div>
+    <div class="prev-html-kpi">
+      ${[[k.atividades,'Atividades'],[k.decisoes,'Decisões'],[k.executores,'Executores'],[k.sistemas,'Sistemas']]
+        .map(([v,r])=>`<div><b>${v}</b><span>${r}</span></div>`).join('')}
+    </div>
+    <div class="prev-html-l"></div><div class="prev-html-l" style="width:82%"></div>
+    <div class="prev-html-l" style="width:64%"></div>
+    <div class="prev-html-box">o desenho aparece aqui</div>
+    <div class="prev-html-l" style="width:74%"></div><div class="prev-html-l" style="width:88%"></div>
+  </div>`;
+}
+function previaProjeto(paginas){
+  const todas=listaPaginas();
+  return `<div class="prev-proj">
+    <div class="prev-proj-t">O arquivo de projeto guarda <b>todas as ${todas.length} páginas</b>,
+      independentemente do escopo escolhido acima.</div>
+    <div class="prev-proj-l">
+      ${todas.map((p,j)=>`<div class="prev-proj-p">
+        <span class="prev-proj-n">${j+1}</span>
+        <span class="prev-proj-nm">${esc(p.nome)}</span>
+        <span class="prev-proj-q">${p.nodes+p.pools} elementos</span></div>`).join('')}
+    </div>
+    <div class="prev-proj-o">Preserva também comentários, imagens, estilos e a tabela guiada.</div>
+  </div>`;
+}
+function previaTexto(paginas, fmt){
+  const k=kpisProjeto(paginas);
+  return `<div class="prev-txt">
+    <div class="prev-txt-i">${fmt.id==='bpmn'?'&lt;/&gt;':'▤'}</div>
+    <b>${esc(fmt.nome)}</b>
+    <span>${esc(fmt.desc)}</span>
+    <div class="prev-txt-k">${k.atividades} atividade(s) · ${k.conexoes} conexão(ões)${
+      paginas.length>1?` · ${paginas.length} páginas`:''}</div>
+  </div>`;
+}
+
+/* =========================================================================
+   5) A TELA DE EXPORTAÇÃO
+   ========================================================================= */
+function acionarExportacao(formato){
+  const paginas=paginasDoEscopo();
+  const varias=paginas.length>1 && escopoExp.modo!=='atual';
+  /* formatos com tratamento próprio para o projeto inteiro */
+  if(varias && formato==='bpmn') return exportBPMNProjeto();
+  if(varias && formato==='csv')  return exportCSVProjeto();
+  if(varias && formato==='pptx') return exportPPTXProjeto();
+  if(formato==='vbpm') return exportVBPM();
+  return exportarComEscopo(formato);
+}
+
+function montarTelaExportacao(){
+  const view=$('#view-exportar');
+  if(!view || view.dataset.v35) return;
+  const paginas=listaPaginas();
+  const temVarias=paginas.length>1;
+
+  /* preserva o conteúdo original, para não perder nada */
+  const original=view.innerHTML;
+  view.dataset.v35='1';
+  view.innerHTML=`
+    <div class="exp-topo">
+      <div>
+        <h2>Exportar</h2>
+        <p>Escolha o formato e o que entra no arquivo. A prévia à direita mostra o resultado.</p>
+      </div>
+      <div class="exp-escopo-tag" id="expTag"></div>
+    </div>
+    <div class="exp-grade">
+      <div class="exp-esq">
+        <div class="exp-sec">
+          <div class="exp-sec-t">O que exportar</div>
+          <div class="exp-escopo" id="expEscopo"></div>
+          <div class="exp-paginas" id="expPaginas"></div>
+        </div>
+        <div class="exp-sec">
+          <div class="exp-sec-t">Formato</div>
+          <div class="exp-formatos" id="expFormatos"></div>
+        </div>
+      </div>
+      <div class="exp-dir">
+        <div class="exp-previa" id="expPrevia"></div>
+      </div>
+    </div>
+    <div id="expOriginal" style="display:none">${original}</div>`;
+  ligarTelaExportacao();
+}
+function ligarTelaExportacao(){
+  renderEscopo();
+  renderFormatos();
+  renderPrevia();
+}
+function renderEscopo(){
+  const cx=$('#expEscopo'); if(!cx) return;
+  const paginas=listaPaginas();
+  const varias=paginas.length>1;
+  const ops=[
+    {id:'atual',     ico:'▣', t:'Página aberta',  d:'Apenas a página em que você está'},
+    {id:'todas',     ico:'▤', t:'Todas juntas',   d:'Um arquivo com todas as páginas empilhadas'},
+    {id:'separadas', ico:'⧉', t:'Todas separadas',d:'Um arquivo para cada página'},
+    {id:'selecao',   ico:'☑', t:'Escolher',       d:'Selecionar quais páginas entram'}
+  ];
+  cx.innerHTML=ops.map(o=>`
+    <button class="exp-op ${escopoExp.modo===o.id?'on':''} ${!varias&&o.id!=='atual'?'off':''}"
+      data-esc="${o.id}" ${!varias&&o.id!=='atual'?'disabled':''}>
+      <span class="exp-op-i">${o.ico}</span>
+      <span class="exp-op-x"><b>${esc(o.t)}</b><span>${esc(o.d)}</span></span>
+    </button>`).join('');
+  if(!varias){
+    cx.innerHTML+=`<div class="exp-aviso">Este projeto tem uma página só. Crie páginas na barra inferior da modelagem para exportar em lote.</div>`;
+  }
+  $$('#expEscopo [data-esc]').forEach(b=>b.onclick=()=>{
+    if(b.disabled) return;
+    escopoExp.modo=b.dataset.esc;
+    if(escopoExp.modo==='selecao' && !Object.keys(escopoExp.selecao).length){
+      listaPaginas().forEach(p=>{ if(!p.vazia) escopoExp.selecao[p.i]=true; });
+    }
+    renderEscopo(); renderListaPaginas(); renderPrevia(); atualizarTagEscopo();
+  });
+  renderListaPaginas();
+  atualizarTagEscopo();
+}
+function renderListaPaginas(){
+  const cx=$('#expPaginas'); if(!cx) return;
+  if(escopoExp.modo!=='selecao'){ cx.innerHTML=''; cx.classList.remove('show'); return; }
+  const paginas=listaPaginas();
+  cx.classList.add('show');
+  cx.innerHTML=`
+    <div class="exp-pg-cab">
+      <button class="exp-pg-b" id="expTodas">Todas</button>
+      <button class="exp-pg-b" id="expNenhuma">Nenhuma</button>
+      <span id="expConta"></span>
+    </div>
+    ${paginas.map(p=>`
+      <label class="exp-pg ${p.vazia?'vazia':''}">
+        <input type="checkbox" data-pg="${p.i}" ${escopoExp.selecao[p.i]?'checked':''} ${p.vazia?'disabled':''}>
+        <span class="exp-pg-n">${esc(p.nome)}</span>
+        <span class="exp-pg-q">${p.vazia?'vazia':`${p.nodes+p.pools} elem.`}</span>
+      </label>`).join('')}`;
+  const conta=()=>{
+    const n=paginas.filter(p=>escopoExp.selecao[p.i]).length;
+    const c=$('#expConta'); if(c) c.textContent=`${n} de ${paginas.length}`;
+  };
+  conta();
+  $$('#expPaginas [data-pg]').forEach(ch=>ch.onchange=()=>{
+    const i=+ch.dataset.pg;
+    if(ch.checked) escopoExp.selecao[i]=true; else delete escopoExp.selecao[i];
+    conta(); renderPrevia(); atualizarTagEscopo();
+  });
+  const bt=$('#expTodas');
+  if(bt) bt.onclick=()=>{ paginas.forEach(p=>{ if(!p.vazia) escopoExp.selecao[p.i]=true; });
+    renderListaPaginas(); renderPrevia(); atualizarTagEscopo(); };
+  const bn=$('#expNenhuma');
+  if(bn) bn.onclick=()=>{ escopoExp.selecao={}; renderListaPaginas(); renderPrevia(); atualizarTagEscopo(); };
+}
+function atualizarTagEscopo(){
+  const t=$('#expTag'); if(!t) return;
+  const p=paginasDoEscopo();
+  const rot={atual:'página aberta', todas:'todas juntas', separadas:'arquivos separados', selecao:'seleção'};
+  t.innerHTML=`<b>${p.length}</b> página(s) · ${esc(rot[escopoExp.modo]||'')}`;
+}
+function renderFormatos(){
+  const cx=$('#expFormatos'); if(!cx) return;
+  cx.innerHTML=FORMATOS_EXP.map(f=>`
+    <button class="exp-fmt ${previaFormato===f.id?'on':''}" data-fmt="${f.id}">
+      <span class="exp-fmt-e">${f.ext.toUpperCase()}</span>
+      <span class="exp-fmt-n">${esc(f.nome)}</span>
+    </button>`).join('');
+  $$('#expFormatos [data-fmt]').forEach(b=>b.onclick=()=>{
+    previaFormato=b.dataset.fmt;
+    renderFormatos(); renderPrevia();
+  });
+}
+
+/* =========================================================================
+   6) A DOCUMENTAÇÃO GANHA O SELETOR DE ESCOPO
+   ========================================================================= */
+function montarEscopoDoc(){
+  const alvo=$('#pgIncDiag');
+  if(!alvo || $('#docEscopoCx')) return;
+  const pai=alvo.parentNode && alvo.parentNode.parentNode;
+  if(!pai) return;
+  const d=document.createElement('div');
+  d.id='docEscopoCx';
+  d.className='doc-escopo';
+  d.innerHTML=`
+    <span class="doc-escopo-t">Conteúdo</span>
+    <button class="doc-escopo-b on" data-de="projeto">Projeto inteiro</button>
+    <button class="doc-escopo-b" data-de="atual">Só a página aberta</button>`;
+  pai.insertBefore(d, pai.firstChild);
+  $$('#docEscopoCx [data-de]').forEach(b=>b.onclick=()=>{
+    docEscopo=b.dataset.de;
+    $$('#docEscopoCx [data-de]').forEach(x=>x.classList.toggle('on',x===b));
+    gerarDoc();
+  });
+}
+
+/* =========================================================================
+   7) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  .exp-topo{display:flex;align-items:flex-start;gap:16px;padding:20px 26px 0;max-width:1500px;margin:0 auto}
+  .exp-topo h2{margin:0 0 4px;font-size:19px}
+  .exp-topo p{margin:0;font-size:12.5px;color:var(--txt2)}
+  .exp-escopo-tag{margin-left:auto;background:var(--musgo-0);border:1px solid var(--line);
+    border-radius:20px;padding:6px 14px;font-size:11.5px;color:var(--txt2);white-space:nowrap}
+  .exp-escopo-tag b{color:var(--acao)}
+  .exp-grade{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:18px;
+    padding:16px 26px 26px;max-width:1500px;margin:0 auto;align-items:start}
+  .exp-esq{display:flex;flex-direction:column;gap:14px}
+  .exp-sec{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;box-shadow:var(--shadow)}
+  .exp-sec-t{font-size:10px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;
+    color:var(--txt3);margin-bottom:10px}
+  .exp-escopo{display:flex;flex-direction:column;gap:6px}
+  .exp-op{display:flex;align-items:flex-start;gap:10px;border:1px solid var(--line2);
+    background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left;transition:.12s}
+  .exp-op:hover:not(.off){border-color:var(--acao);box-shadow:0 2px 8px rgba(35,48,41,.10)}
+  .exp-op.on{border-color:var(--acao);background:var(--musgo-0);box-shadow:0 0 0 2px rgba(61,81,66,.12)}
+  .exp-op.off{opacity:.42;cursor:not-allowed}
+  .exp-op-i{width:26px;height:26px;flex:0 0 26px;border-radius:7px;background:var(--musgo-1);
+    color:var(--acao);display:flex;align-items:center;justify-content:center;font-size:13px}
+  .exp-op.on .exp-op-i{background:var(--acao);color:#fff}
+  .exp-op-x{flex:1;min-width:0}
+  .exp-op-x b{display:block;font-size:12.5px;margin-bottom:1px}
+  .exp-op-x span{font-size:11px;color:var(--txt3);line-height:1.4}
+  .exp-aviso{font-size:11px;color:var(--txt3);line-height:1.5;margin-top:8px;
+    padding:8px 10px;background:var(--musgo-0);border-radius:8px}
+  .exp-paginas{display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:10px;
+    max-height:260px;overflow-y:auto}
+  .exp-paginas.show{display:block}
+  .exp-pg-cab{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .exp-pg-b{border:1px solid var(--line2);background:#fff;border-radius:6px;padding:3px 9px;
+    cursor:pointer;font-size:10.5px;font-weight:700;color:var(--txt2)}
+  .exp-pg-b:hover{border-color:var(--acao);color:var(--acao)}
+  .exp-pg-cab span{margin-left:auto;font-size:10.5px;color:var(--txt3);font-weight:700}
+  .exp-pg{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:12px;cursor:pointer;
+    border-radius:6px}
+  .exp-pg:hover{background:var(--musgo-0)}
+  .exp-pg.vazia{opacity:.5;cursor:not-allowed}
+  .exp-pg-n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .exp-pg-q{font-size:10px;color:var(--txt3);font-weight:700;white-space:nowrap}
+  .exp-formatos{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .exp-fmt{display:flex;align-items:center;gap:8px;border:1px solid var(--line2);background:#fff;
+    border-radius:9px;padding:9px 10px;cursor:pointer;text-align:left;transition:.12s}
+  .exp-fmt:hover{border-color:var(--acao)}
+  .exp-fmt.on{border-color:var(--acao);background:var(--musgo-0);box-shadow:0 0 0 2px rgba(61,81,66,.12)}
+  .exp-fmt-e{font-size:8.5px;font-weight:800;letter-spacing:.4px;background:var(--acao-grad,var(--acao));
+    color:#fff;border-radius:5px;padding:3px 6px;flex:0 0 auto}
+  .exp-fmt-n{font-size:11.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .exp-dir{position:sticky;top:16px}
+  .exp-previa{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    overflow:hidden;box-shadow:var(--shadow)}
+  .prev-cab{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--musgo-0);
+    border-bottom:1px solid var(--line)}
+  .prev-cab b{display:block;font-size:13px}
+  .prev-cab span{font-size:11px;color:var(--txt3)}
+  .prev-ext{margin-left:auto;font-family:Consolas,monospace;font-size:11px;font-weight:800;
+    background:var(--acao);color:#fff;border-radius:6px;padding:3px 9px}
+  .prev-corpo{padding:16px;min-height:280px;max-height:60vh;overflow:auto;background:#F7F9F8}
+  .prev-rod{display:flex;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--line)}
+  .prev-rod span{flex:1;font-size:11.5px;color:var(--txt2);line-height:1.45}
+  .prev-folha{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;
+    box-shadow:0 2px 10px rgba(35,48,41,.07)}
+  .prev-vazio{padding:40px;text-align:center;color:var(--txt3);font-size:12px}
+  .prev-erro{padding:20px;color:var(--err);font-size:12px}
+  .prev-mais{text-align:center;font-size:11px;color:var(--txt3);margin-top:10px;font-weight:600}
+  .prev-grade{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .prev-card{background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .prev-card-t{font-size:10.5px;font-weight:700;padding:6px 9px;background:var(--musgo-0);
+    border-bottom:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .prev-card-d{padding:8px;max-height:150px;overflow:hidden}
+  .prev-tab{width:100%;border-collapse:collapse;font-size:11px;background:#fff;border-radius:8px;overflow:hidden}
+  .prev-tab th{background:var(--musgo-0);padding:7px 9px;text-align:left;font-size:9.5px;
+    text-transform:uppercase;letter-spacing:.4px;color:var(--txt3);border-bottom:1px solid var(--line)}
+  .prev-tab td{padding:6px 9px;border-bottom:1px solid var(--line);color:var(--txt2)}
+  .prev-slides{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .prev-slide{background:#fff;border:1px solid var(--line);border-radius:7px;padding:14px 12px;
+    aspect-ratio:16/9;display:flex;flex-direction:column;justify-content:center}
+  .prev-slide.capa{background:var(--acao);border-color:var(--acao)}
+  .prev-slide.capa .prev-slide-t{color:#fff;font-size:13px}
+  .prev-slide.capa .prev-slide-s{color:rgba(255,255,255,.7)}
+  .prev-slide-t{font-size:11.5px;font-weight:700;line-height:1.35;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .prev-slide-s{font-size:9.5px;color:var(--txt3);margin-top:3px}
+  .prev-html{background:#fff;border:1px solid var(--line);border-radius:8px;padding:16px}
+  .prev-html-cab{font-size:14px;font-weight:800;margin-bottom:10px;color:var(--txt)}
+  .prev-html-kpi{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .prev-html-kpi div{background:var(--musgo-0);border-radius:7px;padding:7px 12px;min-width:64px}
+  .prev-html-kpi b{display:block;font-size:15px;color:var(--acao)}
+  .prev-html-kpi span{font-size:8.5px;text-transform:uppercase;color:var(--txt3);font-weight:700}
+  .prev-html-l{height:7px;background:var(--musgo-1);border-radius:4px;margin-bottom:6px}
+  .prev-html-box{background:var(--musgo-0);border:1px dashed var(--line2);border-radius:8px;
+    padding:26px;text-align:center;font-size:11px;color:var(--txt3);margin:10px 0}
+  .prev-proj{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px}
+  .prev-proj-t{font-size:12px;color:var(--txt2);line-height:1.5;margin-bottom:10px}
+  .prev-proj-l{display:flex;flex-direction:column;gap:4px}
+  .prev-proj-p{display:flex;align-items:center;gap:9px;padding:6px 8px;background:var(--musgo-0);
+    border-radius:7px;font-size:11.5px}
+  .prev-proj-n{width:19px;height:19px;border-radius:5px;background:var(--acao);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex:0 0 19px}
+  .prev-proj-nm{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .prev-proj-q{font-size:10px;color:var(--txt3);font-weight:700}
+  .prev-proj-o{font-size:11px;color:var(--txt3);margin-top:10px;line-height:1.45}
+  .prev-txt{background:#fff;border:1px solid var(--line);border-radius:8px;padding:34px 20px;
+    text-align:center}
+  .prev-txt-i{font-size:30px;color:var(--musgo-4);margin-bottom:8px;font-family:Consolas,monospace}
+  .prev-txt b{display:block;font-size:14px;margin-bottom:4px}
+  .prev-txt span{font-size:11.5px;color:var(--txt2);line-height:1.5}
+  .prev-txt-k{margin-top:12px;font-size:11px;color:var(--txt3);font-weight:700}
+  .doc-escopo{display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  .doc-escopo-t{font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+    color:var(--txt3);margin-right:2px}
+  .doc-escopo-b{border:1px solid var(--line2);background:#fff;border-radius:20px;padding:5px 13px;
+    cursor:pointer;font-size:11.5px;font-weight:700;color:var(--txt2)}
+  .doc-escopo-b:hover{border-color:var(--acao);color:var(--acao)}
+  .doc-escopo-b.on{background:var(--acao);border-color:var(--acao);color:#fff}
+  @media(max-width:1100px){
+    .exp-grade{grid-template-columns:1fr}
+    .exp-dir{position:static}
+  }`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   8) ARRANQUE
+   ========================================================================= */
+function initV35(){
+  montarTelaExportacao();
+  montarEscopoDoc();
+  /* ao trocar de página, a prévia e o escopo acompanham */
+  const _cp=carregarPagina;
+  if(typeof _cp==='function' && !_cp._v35){
+    const novo=function(i){
+      const r=_cp.apply(this, arguments);
+      try{ if($('#expPrevia')) { renderEscopo(); renderPrevia(); } }catch(e){}
+      return r;
+    };
+    novo._v35=true;
+    carregarPagina=novo;
+  }
+}
+(function(){
+  function arrancar(){
+    try{ initV35(); }catch(e){}
+    /* a tela de exportação pode ser montada só quando visitada */
+    const nav=$('#btnNav');
+    if(nav) nav.addEventListener('click', ()=>setTimeout(()=>{
+      try{ montarTelaExportacao(); }catch(e){}
+    }, 300));
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,460));
+  else setTimeout(arrancar,460);
+})();
+
+</script>
 </body></html>
