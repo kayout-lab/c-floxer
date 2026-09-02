@@ -18715,4 +18715,1181 @@ window.addEventListener('resize', ()=>{ try{ atualizarSetasAbas(); }catch(e){} }
 
 </script>
 
+
+<script>
+/* =========================================================================
+   C-Floxer v32 — Links, processos referenciados e formas de comunicação
+   1) Hiperlink de URL em qualquer elemento
+   2) Referência a outro processo — página, agrupamento, raia ou piscina
+   3) Registro de processos: agrupamentos e raias passam a ter nome próprio
+   4) Nova categoria de formas: Comunicação
+   5) Ícones de internet
+   Nada anterior é removido: tudo aqui corrige ou acrescenta.
+   ========================================================================= */
+
+/* =========================================================================
+   1) O QUE É UM "PROCESSO" DENTRO DO DESENHO
+   Uma página inteira, um agrupamento, uma piscina ou uma raia podem receber
+   um nome de processo. É isso que torna a ligação possível sem ambiguidade.
+   ========================================================================= */
+
+/* varre todas as páginas e devolve tudo que pode ser destino de um link */
+function processosDisponiveis(){
+  if(typeof salvarPaginaAtual==='function'){ try{ salvarPaginaAtual(); }catch(e){} }
+  if(typeof garantirPaginas==='function') garantirPaginas();
+  const lista=[];
+  (model.paginas||[]).forEach((p,i)=>{
+    const nos=(p.nodes||[]), pools=(p.pools||[]);
+    const fluxo=nos.filter(n=>typeof ehElementoDeFluxo==='function' && ehElementoDeFluxo(n)).length;
+    lista.push({
+      tipo:'pagina', id:p.id, pgId:p.id, pgIdx:i,
+      nome:p.nome||('Página '+(i+1)),
+      detalhe:`${nos.length} elemento(s)${fluxo?` · ${fluxo} de fluxo`:''}`,
+      grupo:'Páginas'
+    });
+    /* agrupamentos nomeados */
+    nos.filter(n=>n.type==='group').forEach(g=>{
+      lista.push({
+        tipo:'grupo', id:g.id, pgId:p.id, pgIdx:i,
+        nome:g.nomeProcesso || g.name || 'Agrupamento',
+        detalhe:`agrupamento em “${p.nome}”`,
+        grupo:'Agrupamentos'
+      });
+    });
+    /* piscinas e raias */
+    pools.forEach(pl=>{
+      lista.push({
+        tipo:'piscina', id:pl.id, pgId:p.id, pgIdx:i,
+        nome:pl.nomeProcesso || pl.name || 'Piscina',
+        detalhe:`piscina em “${p.nome}”`,
+        grupo:'Piscinas e raias'
+      });
+      (pl.lanes||[]).forEach(l=>{
+        lista.push({
+          tipo:'raia', id:l.id, pgId:p.id, pgIdx:i, poolId:pl.id,
+          nome:l.nomeProcesso || l.name || 'Raia',
+          detalhe:`raia de “${pl.name||'piscina'}”`,
+          grupo:'Piscinas e raias'
+        });
+      });
+    });
+  });
+  return lista;
+}
+
+/* localiza a referência guardada num elemento, mesmo se as páginas mudaram de ordem */
+function resolverProcesso(ref){
+  if(!ref || !ref.id) return null;
+  return processosDisponiveis().find(p=>p.tipo===ref.tipo && p.id===ref.id) || null;
+}
+
+/* rótulo curto do destino, para o balão e o painel */
+function rotuloProcesso(ref){
+  const p=resolverProcesso(ref);
+  if(!p) return ref && ref.nome ? ref.nome+' (não encontrado)' : 'destino não encontrado';
+  return p.nome;
+}
+
+/* =========================================================================
+   2) NAVEGAR ATÉ O PROCESSO REFERENCIADO
+   ========================================================================= */
+function irParaProcesso(ref){
+  const alvo=resolverProcesso(ref);
+  if(!alvo){
+    toast('O processo referenciado não existe mais — reveja o vínculo','err');
+    return false;
+  }
+  /* troca de página quando necessário */
+  const idxAtual = model.paginaAtual||0;
+  if(alvo.pgIdx !== idxAtual){
+    if(typeof carregarPagina==='function') carregarPagina(alvo.pgIdx);
+    if(typeof renderAbas==='function') renderAbas();
+  }
+  if(typeof irPara==='function') irPara('modelar');
+
+  if(alvo.tipo==='pagina'){
+    render(); renderProps(); atualizarSelInfo(); fit();
+    toast(`Aberto: “${alvo.nome}”`,'ok');
+    return true;
+  }
+
+  /* agrupamento, piscina ou raia: enquadra a área e seleciona */
+  let cx, cy, larg, alt, idSel=null;
+  if(alvo.tipo==='grupo'){
+    const g=nodeById(alvo.id);
+    if(!g){ render(); fit(); return true; }
+    cx=g.x+g.w/2; cy=g.y+g.h/2; larg=g.w; alt=g.h; idSel=g.id;
+  } else {
+    const pool=model.pools.find(p=>p.id===alvo.id) ||
+               model.pools.find(p=>(p.lanes||[]).some(l=>l.id===alvo.id));
+    if(!pool){ render(); fit(); return true; }
+    if(alvo.tipo==='piscina'){
+      cx=pool.x+pool.w/2; cy=pool.y+pool.h/2; larg=pool.w; alt=pool.h; idSel=pool.id;
+    } else {
+      const g=(typeof geoRaia==='function') ? geoRaia(pool, alvo.id) : null;
+      if(!g){ render(); fit(); return true; }
+      cx=g.x+g.w/2; cy=g.y+g.h/2; larg=g.w; alt=g.h; idSel=pool.id;
+    }
+  }
+  const host=$('#svgHost');
+  const k=Math.min(1.8, Math.max(0.25,
+    Math.min((host.clientWidth-140)/Math.max(80,larg), (host.clientHeight-180)/Math.max(60,alt))));
+  view.k=k;
+  view.tx=host.clientWidth/2-cx*view.k;
+  view.ty=host.clientHeight/2-cy*view.k;
+  if(idSel) setSel(idSel);
+  render(); renderProps(); atualizarSelInfo();
+  toast(`Aberto: “${alvo.nome}”`,'ok');
+  return true;
+}
+
+/* =========================================================================
+   3) HIPERLINK DE URL
+   ========================================================================= */
+function normalizarURL(u){
+  const v=String(u||'').trim();
+  if(!v) return '';
+  /* endereços perigosos não são aceitos */
+  if(/^(javascript|data|vbscript):/i.test(v)) return '';
+  if(/^(https?:|mailto:|tel:|ms-teams:|onenote:|file:)/i.test(v)) return v;
+  if(/^www\./i.test(v)) return 'https://'+v;
+  if(/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(v)) return 'https://'+v;
+  return v;
+}
+function abrirURL(u){
+  const v=normalizarURL(u);
+  if(!v){ toast('Endereço inválido ou não permitido','err'); return false; }
+  try{ window.open(v,'_blank','noopener,noreferrer'); toast('Abrindo em outra aba'); return true; }
+  catch(e){ toast('O navegador bloqueou a abertura — copie o endereço','err'); return false; }
+}
+
+/* o elemento tem algum vínculo? */
+function temVinculo(o){ return !!(o && (o.url || (o.refProc && o.refProc.id))); }
+
+/* =========================================================================
+   4) O SELO NO DESENHO — sinaliza que há um destino, sem atrapalhar a edição
+   O selo é um alvo próprio: clicar nele navega; clicar no resto edita.
+   ========================================================================= */
+function seloVinculoSVG(n){
+  if(!temVinculo(n)) return '';
+  const temProc = !!(n.refProc && n.refProc.id);
+  const temUrl  = !!n.url;
+  const b={x:n.x, y:n.y, w:n.w, h:n.h};
+  const f=(typeof fatorFonte==='function'?fatorFonte(n):1);
+  const alt=Math.max(16, 17*f), R=alt/2;
+  const larg=(temProc&&temUrl) ? alt*2.1 : alt*1.25;
+  const x=b.x+b.w-larg+4, y=b.y-alt/2-2;
+  const cor = temProc ? '#5B4B9E' : '#2C6E9E';
+  const dica = temProc
+    ? 'Abre o processo “'+rotuloProcesso(n.refProc)+'” — clique no selo'
+    : 'Abre '+String(n.url).slice(0,60)+' — clique no selo';
+  let s=`<g data-vinculo="${n.id}" style="cursor:pointer">`;
+  s+=`<title>${esc(dica)}</title>`;
+  /* área de clique generosa, para não exigir pontaria */
+  s+=`<rect x="${x-6}" y="${y-6}" width="${larg+12}" height="${alt+12}" fill="transparent"/>`;
+  s+=`<rect x="${x}" y="${y}" width="${larg}" height="${alt}" rx="${R}" fill="${cor}" stroke="#fff" stroke-width="1.6"/>`;
+  const meio=y+alt/2;
+  if(temProc&&temUrl){
+    s+=`<text x="${x+larg*0.30}" y="${meio}" text-anchor="middle" dominant-baseline="middle" font-size="${9.5*f}" font-weight="800" fill="#fff" style="pointer-events:none">⧉</text>`;
+    s+=`<text x="${x+larg*0.70}" y="${meio}" text-anchor="middle" dominant-baseline="middle" font-size="${9.5*f}" font-weight="800" fill="#fff" style="pointer-events:none">↗</text>`;
+  } else {
+    s+=`<text x="${x+larg/2}" y="${meio}" text-anchor="middle" dominant-baseline="middle" font-size="${10*f}" font-weight="800" fill="#fff" style="pointer-events:none">${temProc?'⧉':'↗'}</text>`;
+  }
+  s+=`</g>`;
+  /* processo referenciado ganha a moldura dupla, como manda a leitura de subprocesso */
+  if(temProc){
+    s+=`<rect x="${b.x+3.5}" y="${b.y+3.5}" width="${Math.max(0,b.w-7)}" height="${Math.max(0,b.h-7)}" rx="7"
+         fill="none" stroke="${cor}" stroke-width="1.2" stroke-dasharray="5,4" opacity=".55" style="pointer-events:none"/>`;
+    const nome=rotuloProcesso(n.refProc);
+    if(nome && b.h>52){
+      s+=`<text x="${b.x+b.w/2}" y="${b.y+b.h-7}" text-anchor="middle" font-size="${8.4*f}"
+           font-weight="800" fill="${cor}" style="pointer-events:none">⧉ ${esc(String(nome).slice(0,22))}</text>`;
+    }
+  }
+  return s;
+}
+
+/* o selo entra no desenho de qualquer elemento, sem reescrever nodeSVG */
+(function(){
+  if(typeof nodeSVG!=='function' || nodeSVG._v32) return;
+  const orig=nodeSVG;
+  const novo=function(n){
+    let s=orig.apply(this, arguments);
+    try{
+      if(temVinculo(n)){
+        const selo=seloVinculoSVG(n);
+        const i=s.lastIndexOf('</g>');
+        s = i>=0 ? s.slice(0,i)+selo+s.slice(i) : s+selo;
+      }
+    }catch(e){}
+    return s;
+  };
+  novo._v32=true;
+  nodeSVG=novo;
+})();
+
+/* clique no selo — capturado antes do arraste, para não atrapalhar a edição */
+(function(){
+  document.addEventListener('mousedown', ev=>{
+    const g=ev.target && ev.target.closest ? ev.target.closest('[data-vinculo]') : null;
+    if(g){
+      ev.preventDefault(); ev.stopPropagation();
+      const n=nodeById(g.dataset.vinculo);
+      if(!n) return;
+      /* processo tem precedência; com Alt, abre a URL */
+      if(n.refProc && n.refProc.id && !ev.altKey) irParaProcesso(n.refProc);
+      else if(n.url) abrirURL(n.url);
+      else if(n.refProc) irParaProcesso(n.refProc);
+      return;
+    }
+    /* Ctrl+clique no elemento também segue o vínculo */
+    if(ev.ctrlKey || ev.metaKey){
+      const el=ev.target && ev.target.closest ? ev.target.closest('[data-id]') : null;
+      if(!el || el.dataset.kind!=='node') return;
+      const n=nodeById(el.dataset.id);
+      if(!temVinculo(n)) return;
+      ev.preventDefault(); ev.stopPropagation();
+      if(n.refProc && n.refProc.id) irParaProcesso(n.refProc);
+      else abrirURL(n.url);
+    }
+  }, true);
+})();
+
+/* =========================================================================
+   5) O PAINEL GANHA O BLOCO DE VÍNCULOS
+   ========================================================================= */
+function opcoesProcessoHTML(refAtual, excluirId){
+  const lista=processosDisponiveis().filter(p=>p.id!==excluirId);
+  const grupos={};
+  lista.forEach(p=>{ (grupos[p.grupo]=grupos[p.grupo]||[]).push(p); });
+  const sel=(p)=> (refAtual && refAtual.tipo===p.tipo && refAtual.id===p.id) ? 'selected' : '';
+  return `<option value="">— nenhum —</option>`
+    + Object.keys(grupos).map(g=>`<optgroup label="${esc(g)}">`
+        + grupos[g].map(p=>`<option value="${p.tipo}:${p.id}" ${sel(p)}>${esc(p.nome)} · ${esc(p.detalhe)}</option>`).join('')
+        + `</optgroup>`).join('');
+}
+
+function blocoVinculosExternos(o){
+  const ehNo = o && !o.source && !o.lanes;
+  const proc = o.refProc || null;
+  const resolvido = proc ? resolverProcesso(proc) : null;
+  return `
+    <div class="sec" data-sec="sLinks">
+      <button class="sec-head" data-sectog="sLinks">
+        <span class="sec-seta">▾</span>
+        <span>Links e navegação${temVinculo(o)?' <i class="lk-bolha">•</i>':''}</span>
+      </button>
+      <div class="sec-corpo">
+        <div class="dica-inline" style="margin-bottom:10px">
+          O selo aparece no canto do elemento. <b>Clicar no selo</b> abre o destino;
+          clicar no resto continua editando normalmente.
+        </div>
+
+        <div class="field">
+          <label>Endereço na internet ou intranet</label>
+          <div class="lk-linha">
+            <input id="lk_url" value="${esc(o.url||'')}" placeholder="https://… · mailto:… · tel:…">
+            <button class="btn sm" id="lk_abrir" title="Abrir em outra aba">↗</button>
+          </div>
+          <div class="fieldhint" style="text-align:left">
+            ${o.url?esc(normalizarURL(o.url)).slice(0,70):'Aceita site, e-mail, telefone e link do SharePoint ou Teams.'}
+          </div>
+        </div>
+
+        <div class="divider" style="margin:10px 0"></div>
+
+        <label class="lk-tit">Abre outro processo</label>
+        <div class="sub" style="margin-bottom:6px">
+          Ligue esta ${ehNo?'atividade':'conexão'} a uma <b>página</b>, um <b>agrupamento</b>,
+          uma <b>piscina</b> ou uma <b>raia</b> — o desdobramento do macroprocesso.
+        </div>
+        <div class="field">
+          <select id="lk_proc">${opcoesProcessoHTML(proc, o.id)}</select>
+        </div>
+        ${proc && !resolvido ? `<div class="lk-alerta">⚠ O destino guardado não existe mais neste arquivo.</div>`:''}
+        ${resolvido ? `<div class="lk-ok">⧉ Vinculado a <b>${esc(resolvido.nome)}</b> — ${esc(resolvido.detalhe)}</div>`:''}
+
+        <div class="lk-bts">
+          <button class="btn sm" id="lk_ir" ${proc?'':'disabled'}>⧉ Abrir o processo</button>
+          <button class="btn sm" id="lk_novaPg">＋ Criar página e vincular</button>
+        </div>
+        <div class="lk-bts">
+          <button class="btn sm" id="lk_gerenciar">☰ Processos do desenho…</button>
+          ${temVinculo(o)?`<button class="btn danger sm" id="lk_limpar">✕ Remover vínculos</button>`:''}
+        </div>
+      </div>
+    </div>`;
+}
+
+function ligarBlocoVinculos(o){
+  const inp=$('#lk_url');
+  if(inp){
+    inp.oninput=e=>{ o.url=e.target.value; render(); };
+    inp.onchange=()=>{ pushHistory(); renderProps(); };
+  }
+  const ab=$('#lk_abrir');
+  if(ab) ab.onclick=()=>{ if(o.url) abrirURL(o.url); else toast('Informe um endereço primeiro','err'); };
+
+  const sel=$('#lk_proc');
+  if(sel) sel.onchange=e=>{
+    const v=e.target.value;
+    if(!v){ delete o.refProc; }
+    else {
+      const [tipo,id]=v.split(':');
+      const p=processosDisponiveis().find(x=>x.tipo===tipo && x.id===id);
+      o.refProc={tipo, id, nome:p?p.nome:''};
+    }
+    pushHistory(); render(); renderProps();
+  };
+
+  const bi=$('#lk_ir');
+  if(bi) bi.onclick=()=>{ if(o.refProc) irParaProcesso(o.refProc); };
+
+  const bn=$('#lk_novaPg');
+  if(bn) bn.onclick=()=>criarPaginaVinculada(o);
+
+  const bg=$('#lk_gerenciar');
+  if(bg) bg.onclick=modalProcessos;
+
+  const bl=$('#lk_limpar');
+  if(bl) bl.onclick=()=>{
+    delete o.url; delete o.refProc;
+    pushHistory(); render(); renderProps();
+    toast('Vínculos removidos');
+  };
+}
+
+/* cria uma página nova já ligada ao elemento — o caminho mais curto para desdobrar */
+function criarPaginaVinculada(o){
+  const nome=(o.name||'Subprocesso').trim().replace(/\?$/,'') || 'Subprocesso';
+  const idxAntes=model.paginaAtual;
+  if(typeof novaPagina!=='function'){ toast('Não foi possível criar a página','err'); return; }
+  const p=novaPagina(nome);
+  if(!p){ toast('Não foi possível criar a página','err'); return; }
+  /* volta à página de origem para gravar o vínculo no elemento certo */
+  if(typeof carregarPagina==='function') carregarPagina(idxAntes);
+  const alvo=byId(o.id) || o;
+  alvo.refProc={tipo:'pagina', id:p.id, nome:p.nome};
+  /* uma atividade que desdobra em outro fluxo é, por definição, um subprocesso */
+  if(T[alvo.type] && T[alvo.type].cat==='activity' && alvo.type!=='subProcess' && alvo.type!=='callActivity'){
+    if(typeof converterTipo==='function') converterTipo(alvo,'subProcess',true);
+  }
+  pushHistory();
+  if(typeof renderAbas==='function') renderAbas();
+  render(); renderProps(); atualizarSelInfo();
+  toast(`Página “${p.nome}” criada e vinculada — clique no selo ⧉ para abrir`,'ok');
+}
+
+/* o bloco é acrescentado ao painel depois que ele é montado */
+function injetarBlocoVinculos(){
+  const props=$('#props'); if(!props) return;
+  if(props.querySelector('[data-sec="sLinks"]')) return;
+  if(selection.size!==1) return;
+  const o=byId([...selection][0]);
+  if(!o) return;
+  if(o.titulo || o.fantasma) return;
+  if(o.lanes) return;                       /* piscina tem bloco próprio, abaixo */
+  if(typeof abaProps!=='undefined' && !o.source && abaProps!=='atividade') return;
+
+  const alvo=props.querySelector('.prop-corpo') || props;
+  const div=document.createElement('div');
+  div.innerHTML=blocoVinculosExternos(o);
+  const bloco=div.firstElementChild;
+  if(!bloco) return;
+
+  /* dentro da aba Atividade fica logo após "Conexões"; nos demais, ao final */
+  const secConectar=alvo.querySelector('[data-sec="sConectar"]');
+  if(secConectar && secConectar.parentNode) secConectar.parentNode.insertBefore(bloco, secConectar.nextSibling);
+  else alvo.appendChild(bloco);
+
+  if(typeof ligarSecoes==='function') ligarSecoes();
+  ligarBlocoVinculos(o);
+}
+
+/* piscinas e raias ganham o campo "nome do processo" */
+function injetarNomeProcessoPiscina(){
+  const props=$('#props'); if(!props) return;
+  if(props.querySelector('#pp_nomeProc')) return;
+  if(selection.size!==1) return;
+  const o=byId([...selection][0]);
+  if(!o || !o.lanes) return;
+  const alvo=props.querySelector('#laneList');
+  if(!alvo) return;
+  const div=document.createElement('div');
+  div.innerHTML=`
+    <div class="divider"></div>
+    <h3>Identidade de processo</h3>
+    <div class="sub">Dê um nome de processo à piscina e às raias para poder referenciá-las
+      a partir de outras atividades.</div>
+    <div class="field">
+      <label>Nome do processo desta piscina</label>
+      <input id="pp_nomeProc" value="${esc(o.nomeProcesso||'')}" placeholder="${esc(o.name||'ex.: Contas a Pagar')}">
+    </div>
+    <div id="pp_raias">
+      ${o.lanes.map(l=>`
+        <div class="field">
+          <label>Processo da raia “${esc(l.name)}”</label>
+          <input data-lproc="${l.id}" value="${esc(l.nomeProcesso||'')}" placeholder="opcional">
+        </div>`).join('')}
+    </div>
+    <button class="btn sm" id="pp_verProc">☰ Processos do desenho…</button>`;
+  alvo.parentNode.insertBefore(div, alvo.nextSibling);
+
+  const i=$('#pp_nomeProc');
+  if(i){ i.oninput=e=>{ o.nomeProcesso=e.target.value; }; i.onchange=()=>{ pushHistory(); toast('Nome de processo salvo'); }; }
+  $$('#pp_raias [data-lproc]').forEach(inp=>{
+    inp.oninput=e=>{
+      const l=o.lanes.find(x=>x.id===inp.dataset.lproc);
+      if(l) l.nomeProcesso=e.target.value;
+    };
+    inp.onchange=()=>pushHistory();
+  });
+  const b=$('#pp_verProc'); if(b) b.onclick=modalProcessos;
+}
+
+/* agrupamentos também recebem nome de processo */
+function injetarNomeProcessoGrupo(){
+  const props=$('#props'); if(!props) return;
+  if(props.querySelector('#gp_nomeProc')) return;
+  if(selection.size!==1) return;
+  const o=byId([...selection][0]);
+  if(!o || o.type!=='group') return;
+  const alvo=props.querySelector('[data-sec="sLinks"]') || props.querySelector('.prop-corpo') || props;
+  const div=document.createElement('div');
+  div.innerHTML=`
+    <div class="sec" data-sec="sGrupoProc">
+      <button class="sec-head" data-sectog="sGrupoProc">
+        <span class="sec-seta">▾</span><span>Este agrupamento é um processo</span>
+      </button>
+      <div class="sec-corpo">
+        <div class="sub">Nomeando o agrupamento como processo, ele passa a aparecer na
+          lista de destinos e pode ser aberto a partir de qualquer atividade.</div>
+        <div class="field">
+          <label>Nome do processo</label>
+          <input id="gp_nomeProc" value="${esc(o.nomeProcesso||'')}" placeholder="${esc(o.name||'ex.: Aprovação de crédito')}">
+        </div>
+        <div class="sub">${(typeof membrosDoGrupo==='function'?membrosDoGrupo(o).length:0)} elemento(s) dentro deste agrupamento.</div>
+      </div>
+    </div>`;
+  const bloco=div.firstElementChild;
+  if(alvo.parentNode && alvo.dataset && alvo.dataset.sec==='sLinks') alvo.parentNode.insertBefore(bloco, alvo);
+  else alvo.appendChild(bloco);
+  if(typeof ligarSecoes==='function') ligarSecoes();
+  const i=$('#gp_nomeProc');
+  if(i){ i.oninput=e=>{ o.nomeProcesso=e.target.value; }; i.onchange=()=>{ pushHistory(); toast('Agrupamento registrado como processo','ok'); }; }
+}
+
+/* enxerta os blocos sem reescrever renderProps */
+(function(){
+  if(typeof renderProps!=='function' || renderProps._v32) return;
+  const orig=renderProps;
+  const novo=function(){
+    const r=orig.apply(this, arguments);
+    try{ injetarNomeProcessoGrupo(); }catch(e){}
+    try{ injetarBlocoVinculos(); }catch(e){}
+    try{ injetarNomeProcessoPiscina(); }catch(e){}
+    return r;
+  };
+  novo._v32=true;
+  renderProps=novo;
+})();
+
+/* =========================================================================
+   6) PAINEL "PROCESSOS DO DESENHO" — nomear e navegar de um lugar só
+   ========================================================================= */
+function quemReferencia(ref){
+  let n=0;
+  (model.paginas||[]).forEach(p=>{
+    (p.nodes||[]).forEach(x=>{
+      if(x.refProc && x.refProc.tipo===ref.tipo && x.refProc.id===ref.id) n++;
+    });
+  });
+  return n;
+}
+
+function modalProcessos(){
+  const lista=processosDisponiveis();
+  const grupos={};
+  lista.forEach(p=>{ (grupos[p.grupo]=grupos[p.grupo]||[]).push(p); });
+  const linhas=Object.keys(grupos).map(g=>`
+    <div class="pr-grupo">${esc(g)}</div>
+    <table class="doc" style="border:0;padding:0;box-shadow:none;margin:0 0 12px">
+      <thead><tr><th style="width:44%">Nome do processo</th><th>Onde está</th>
+        <th style="text-align:center;width:70px">Ligações</th><th style="width:96px"></th></tr></thead>
+      <tbody>
+        ${grupos[g].map(p=>`
+          <tr>
+            <td><input class="pr-nome" data-prn="${p.tipo}:${p.id}" value="${esc(p.nome)}"></td>
+            <td style="font-size:11.5px;color:var(--txt3)">${esc(p.detalhe)}</td>
+            <td style="text-align:center"><b>${quemReferencia(p)}</b></td>
+            <td style="white-space:nowrap">
+              <button class="btn sm" data-prir="${p.tipo}:${p.id}">⧉ Abrir</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`).join('');
+
+  const semNome=lista.filter(p=>p.tipo!=='pagina' && !p.nome).length;
+
+  abrirModal('☰ Processos do desenho',
+    `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">
+       Tudo que pode ser destino de um link: <b>páginas</b>, <b>agrupamentos</b>,
+       <b>piscinas</b> e <b>raias</b>. Dê a cada um o nome do processo que representa —
+       é assim que a ligação entre macroprocesso e subprocesso fica clara.</p>
+     ${linhas || '<div class="empty">Nenhum processo registrado ainda.</div>'}
+     <div class="dica-inline">
+       Para desdobrar uma atividade, selecione-a no desenho e use
+       <b>Links e navegação → Criar página e vincular</b>. O C-Floxer cria a página,
+       liga a atividade e a converte em subprocesso.
+     </div>`,
+    `<button class="btn" id="prNovaPg">＋ Nova página</button>
+     <button class="btn primary" onclick="fecharModal()">Fechar</button>`);
+
+  $$('#modal [data-prn]').forEach(inp=>{
+    inp.onchange=()=>{
+      const [tipo,id]=inp.dataset.prn.split(':');
+      const v=inp.value.trim();
+      aplicarNomeProcesso(tipo, id, v);
+      pushHistory();
+      if(typeof renderAbas==='function') renderAbas();
+      render(); renderProps();
+      toast('Nome atualizado','ok');
+    };
+  });
+  $$('#modal [data-prir]').forEach(b=>b.onclick=()=>{
+    const [tipo,id]=b.dataset.prir.split(':');
+    fecharModal();
+    irParaProcesso({tipo, id});
+  });
+  const bn=$('#prNovaPg');
+  if(bn) bn.onclick=()=>{ fecharModal(); if(typeof novaPagina==='function') novaPagina(); };
+}
+
+function aplicarNomeProcesso(tipo, id, nome){
+  if(typeof salvarPaginaAtual==='function'){ try{ salvarPaginaAtual(); }catch(e){} }
+  (model.paginas||[]).forEach(p=>{
+    if(tipo==='pagina' && p.id===id){ p.nome=nome||p.nome; return; }
+    if(tipo==='grupo'){
+      const g=(p.nodes||[]).find(n=>n.id===id);
+      if(g){ g.nomeProcesso=nome; if(!g.name) g.name=nome; }
+    }
+    if(tipo==='piscina'){
+      const pl=(p.pools||[]).find(x=>x.id===id);
+      if(pl) pl.nomeProcesso=nome;
+    }
+    if(tipo==='raia'){
+      (p.pools||[]).forEach(pl=>{
+        const l=(pl.lanes||[]).find(x=>x.id===id);
+        if(l) l.nomeProcesso=nome;
+      });
+    }
+  });
+}
+
+/* =========================================================================
+   7) NOVA CATEGORIA: COMUNICAÇÃO
+   Canais, disparos, públicos e respostas — o vocabulário de quem desenha
+   fluxos de comunicação, campanha e atendimento.
+   ========================================================================= */
+FAMILIAS.push({id:'com', label:'Comunicação', icone:'✉',
+  tip:'Canais e peças de comunicação: WhatsApp, SMS, e-mail, site, landing page, push, chatbot e campanhas.'});
+
+const CM_VERDE='#1F7A4C', CM_AZUL='#2C6E9E', CM_ROXO='#5B4B9E',
+      CM_AMBAR='#B7791F', CM_VERM='#C0392B', CM_CINZA='#5A6470', CM_TURQ='#1F6B7D';
+
+Object.assign(T, {
+  /* --- canais --- */
+  comWhatsapp : {fam:'com', cat:'shape', g:'Canais', label:'WhatsApp',        w:170,h:80, stroke:CM_VERDE, sw:1.8, fill:'#EDF7F1', tip:'Conversa por WhatsApp — mensagem ativa ou atendimento.'},
+  comSms      : {fam:'com', cat:'shape', g:'Canais', label:'SMS',             w:170,h:74, stroke:CM_AMBAR, sw:1.8, fill:'#FCF5E7', tip:'Mensagem curta por SMS, com limite de caracteres.'},
+  comEmail    : {fam:'com', cat:'shape', g:'Canais', label:'E-mail',          w:180,h:80, stroke:CM_AZUL,  sw:1.8, fill:'#EDF4FA', tip:'Disparo ou recebimento de e-mail.'},
+  comPush     : {fam:'com', cat:'shape', g:'Canais', label:'Push / App',      w:170,h:80, stroke:CM_ROXO,  sw:1.8, fill:'#F1EFFA', tip:'Notificação enviada ao aplicativo do cliente.'},
+  comTelefone : {fam:'com', cat:'shape', g:'Canais', label:'Telefone / URA',  w:170,h:78, stroke:CM_CINZA, sw:1.8, fill:'#F4F6F8', tip:'Ligação, call center ou atendimento por URA.'},
+  comChatbot  : {fam:'com', cat:'shape', g:'Canais', label:'Chatbot',         w:170,h:86, stroke:CM_TURQ,  sw:1.8, fill:'#EBF7F4', tip:'Atendimento automatizado por assistente virtual.'},
+  comRedeSocial:{fam:'com', cat:'shape', g:'Canais', label:'Rede social',     w:170,h:80, stroke:CM_ROXO,  sw:1.8, fill:'#F6F3FB', tip:'Publicação ou mensagem em rede social.'},
+  comCarta    : {fam:'com', cat:'shape', g:'Canais', label:'Carta / Físico',  w:170,h:78, stroke:CM_CINZA, sw:1.6, fill:'#FFFFFF', tip:'Correspondência impressa ou material físico.'},
+  comMural    : {fam:'com', cat:'shape', g:'Canais', label:'Mural / Interno', w:180,h:84, stroke:CM_AMBAR, sw:1.6, fill:'#FFFFFF', tip:'Comunicado interno: mural, intranet ou newsletter da área.'},
+
+  /* --- web --- */
+  comSite     : {fam:'com', cat:'shape', g:'Web',    label:'Site',            w:190,h:120,stroke:CM_AZUL,  sw:1.8, fill:'#FFFFFF', tip:'Página do site institucional ou portal.'},
+  comLanding  : {fam:'com', cat:'shape', g:'Web',    label:'Landing page',    w:180,h:150,stroke:CM_VERDE, sw:1.8, fill:'#FFFFFF', tip:'Página de conversão, com chamada e formulário.'},
+  comFormWeb  : {fam:'com', cat:'shape', g:'Web',    label:'Formulário',      w:180,h:120,stroke:CM_TURQ,  sw:1.6, fill:'#FFFFFF', tip:'Captura de dados do interessado.'},
+  comBanner   : {fam:'com', cat:'shape', g:'Web',    label:'Banner / Anúncio',w:190,h:90, stroke:CM_AMBAR, sw:1.8, fill:'#FFFCF2', tip:'Peça paga de mídia, que leva a uma página.'},
+  comQR       : {fam:'com', cat:'shape', g:'Web',    label:'QR Code',         w:96, h:96, stroke:CM_CINZA, sw:1.8, fill:'#FFFFFF', tip:'Ponte do físico para o digital.'},
+  comLink     : {fam:'com', cat:'shape', g:'Web',    label:'Link rastreado',  w:180,h:60, stroke:CM_AZUL,  sw:1.6, fill:'#F4F8FB', tip:'Endereço com parâmetros de campanha, para medir origem.'},
+
+  /* --- campanha --- */
+  comCampanha : {fam:'com', cat:'shape', g:'Campanha', label:'Campanha',      w:190,h:86, stroke:CM_ROXO,  sw:2,   fill:'#F1EFFA', tip:'Conjunto de peças e disparos com um objetivo comum.'},
+  comPublico  : {fam:'com', cat:'shape', g:'Campanha', label:'Público-alvo',  w:180,h:86, stroke:CM_AZUL,  sw:1.8, fill:'#EDF4FA', tip:'Segmento que vai receber a comunicação.'},
+  comDisparo  : {fam:'com', cat:'shape', g:'Campanha', label:'Disparo em massa',w:180,h:80,stroke:CM_VERM,  sw:1.8, fill:'#FBEBE9', tip:'Envio simultâneo para toda a base selecionada.'},
+  comGatilho  : {fam:'com', cat:'shape', g:'Campanha', label:'Gatilho',       w:170,h:70, stroke:CM_AMBAR, sw:1.8, fill:'#FCF5E7', tip:'Evento que dispara a comunicação automaticamente.'},
+  comTeste    : {fam:'com', cat:'shape', g:'Campanha', label:'Teste A/B',     w:180,h:82, stroke:CM_TURQ,  sw:1.8, fill:'#EBF7F4', tip:'Duas versões da peça, comparadas por desempenho.'},
+  comMetrica  : {fam:'com', cat:'shape', g:'Campanha', label:'Métrica',       w:180,h:82, stroke:CM_VERDE, sw:1.8, fill:'#EDF7F1', tip:'Abertura, clique, conversão ou resposta.'},
+
+  /* --- retorno --- */
+  comResposta : {fam:'com', cat:'shape', g:'Retorno',  label:'Resposta',      w:180,h:78, stroke:CM_VERDE, sw:1.8, fill:'#FFFFFF', tip:'Retorno do destinatário, por qualquer canal.'},
+  comOptIn    : {fam:'com', cat:'shape', g:'Retorno',  label:'Aceite (opt-in)',w:180,h:70,stroke:CM_VERDE, sw:1.8, fill:'#EDF7F1', tip:'Autorização do destinatário para receber.'},
+  comOptOut   : {fam:'com', cat:'shape', g:'Retorno',  label:'Descadastro',   w:180,h:70, stroke:CM_VERM,  sw:1.8, fill:'#FBEBE9', tip:'Pedido de saída da base — obrigatório na LGPD.'},
+  comFalha    : {fam:'com', cat:'shape', g:'Retorno',  label:'Falha de entrega',w:180,h:74,stroke:CM_VERM,  sw:1.8, fill:'#FBEBE9', tip:'Mensagem não entregue: número inválido, caixa cheia, bloqueio.'},
+
+  /* --- integração --- */
+  comCRM      : {fam:'com', cat:'shape', g:'Integração', label:'CRM / Base',  w:170,h:86, stroke:CM_AZUL,  sw:1.8, fill:'#FFFFFF', tip:'Cadastro de clientes e histórico de contato.'},
+  comApiCom   : {fam:'com', cat:'shape', g:'Integração', label:'API de envio',w:180,h:64, stroke:CM_TURQ,  sw:1.8, fill:'#EBF7F4', tip:'Serviço que executa o disparo — provedor de mensageria.'},
+  comFilaCom  : {fam:'com', cat:'shape', g:'Integração', label:'Fila de envio',w:180,h:70, stroke:CM_AMBAR, sw:1.8, fill:'#FCF5E7', tip:'Mensagens aguardando processamento e janela de envio.'}
+});
+
+/* ---------- desenho das formas de comunicação ---------- */
+function formaComunicacaoSVG(n, st, sw, fill, escF){
+  escF=escF||1;
+  const b=bbox(n), x=b.x, y=b.y, w=n.w, h=n.h, cx=b.cx, cy=b.cy, t=n.type;
+  const P=(d,f,ex)=>`<path d="${d}" fill="${f||'none'}" stroke="${st}" stroke-width="${ex||sw}" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const cxLbl=(s,px,py,mc,ml,fs,fw,cor,al)=>textBlock(s,px,py,mc,ml,fs,fw,cor||PRETO,al||'middle',n.id,escF);
+  const linha=(x1,y1,x2,y2,o)=>`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${st}" stroke-width="${sw*0.8}" opacity="${o||.45}"/>`;
+  const cxTxt=(px)=>Math.max(6,Math.floor((w-px)/5.8));
+  let s='';
+
+  /* ===== canais ===== */
+  if(t==='comWhatsapp'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="12" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    /* balão de conversa com a cauda característica */
+    s+=P(`M${x+16} ${y+16}h34a13 13 0 0 1 13 13v14a13 13 0 0 1-13 13h-20l-11 9v-9h-3a13 13 0 0 1-13-13V29a13 13 0 0 1 13-13z`,'none',1.7);
+    s+=P(`M${x+27} ${y+31}c0 9 6 15 15 15l3-4l-5-3l-2 2c-3-1-6-4-7-7l2-2l-3-5l-3 4z`,st,0);
+    s+=textBlock(n.name, x+82, cy, cxTxt(94), 3, 11.6, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comSms'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=P(`M${x+14} ${y+18}h44a8 8 0 0 1 8 8v18a8 8 0 0 1-8 8H${x+34}l-10 8v-8h-2a8 8 0 0 1-8-8V26a8 8 0 0 1 8-8z`);
+    s+=textBlock('SMS', x+40, y+37, 6, 1, 9.5, 800, st,'middle',null,escF);
+    s+=textBlock(n.name, x+78, cy, cxTxt(90), 3, 11.4, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comEmail'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<rect x="${x+14}" y="${y+22}" width="52" height="36" rx="4" fill="none" stroke="${st}" stroke-width="1.7"/>`;
+    s+=P(`M${x+15} ${y+24}l25 19l25-19`,'none',1.5);
+    s+=textBlock(n.name, x+78, cy, cxTxt(90), 3, 11.4, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comPush'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="11" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<rect x="${x+16}" y="${y+14}" width="36" height="52" rx="7" fill="none" stroke="${st}" stroke-width="1.7"/>`;
+    s+=P(`M${x+26} ${y+20}h16`,'none',1.4);
+    s+=`<circle cx="${x+52}" cy="${y+18}" r="7" fill="${CM_VERM}" stroke="#fff" stroke-width="1.6"/>`;
+    s+=`<text x="${x+52}" y="${y+18}" text-anchor="middle" dominant-baseline="middle" font-size="8" font-weight="800" fill="#fff" style="pointer-events:none">1</text>`;
+    s+=textBlock(n.name, x+66, cy, cxTxt(78), 3, 11.4, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comTelefone'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=P(`M${x+18} ${y+20}l9 2l3 12l-7 5c2 8 9 15 17 17l5-7l12 3l2 9c0 3-2 5-6 5c-20 0-40-20-40-40c0-4 2-6 5-6z`,'none',1.7);
+    s+=textBlock(n.name, x+74, cy, cxTxt(86), 3, 11.4, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comChatbot'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="11" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<rect x="${x+16}" y="${y+22}" width="44" height="34" rx="9" fill="none" stroke="${st}" stroke-width="1.7"/>`;
+    s+=P(`M${x+38} ${y+22}v-7`,'none',1.5);
+    s+=`<circle cx="${x+38}" cy="${y+13}" r="3.2" fill="${st}"/>`;
+    s+=`<circle cx="${x+29}" cy="${y+36}" r="3.4" fill="${st}"/><circle cx="${x+47}" cy="${y+36}" r="3.4" fill="${st}"/>`;
+    s+=P(`M${x+29} ${y+46}q9 6 18 0`,'none',1.6);
+    s+=textBlock(n.name, x+72, cy, cxTxt(84), 3, 11.4, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comRedeSocial'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="11" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<circle cx="${x+22}" cy="${y+24}" r="7" fill="none" stroke="${st}" stroke-width="1.7"/>`;
+    s+=`<circle cx="${x+52}" cy="${y+18}" r="6" fill="none" stroke="${st}" stroke-width="1.7"/>`;
+    s+=`<circle cx="${x+50}" cy="${y+52}" r="6" fill="none" stroke="${st}" stroke-width="1.7"/>`;
+    s+=P(`M${x+28} ${y+21}l18-2M${x+27} ${y+29}l19 18`,'none',1.4);
+    s+=textBlock(n.name, x+72, cy, cxTxt(84), 3, 11.4, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comCarta'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=P(`M${x+14} ${y+20}h46v34h-46z`);
+    s+=P(`M${x+14} ${y+20}l23 17l23-17`,'none',1.4);
+    s+=`<rect x="${x+46}" y="${y+24}" width="11" height="9" fill="none" stroke="${st}" stroke-width="1"/>`;
+    s+=textBlock(n.name, x+72, cy, cxTxt(84), 3, 11.2, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comMural'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<rect x="${x+14}" y="${y+18}" width="48" height="38" rx="3" fill="none" stroke="${st}" stroke-width="1.6"/>`;
+    s+=linha(x+20,y+28,x+56,y+28,.6); s+=linha(x+20,y+36,x+50,y+36,.45); s+=linha(x+20,y+44,x+44,y+44,.35);
+    s+=`<circle cx="${x+38}" cy="${y+14}" r="3" fill="${st}"/>`;
+    s+=textBlock(n.name, x+74, cy, cxTxt(86), 3, 11.2, 700, PRETO,'start',n.id,escF);
+  }
+
+  /* ===== web ===== */
+  else if(t==='comSite'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<path d="M${x} ${y+9}a9 9 0 0 1 9-9h${w-18}a9 9 0 0 1 9 9v17H${x}z" fill="${st}" opacity=".10"/>`;
+    s+=P(`M${x} ${y+26}h${w}`,'none',1);
+    ['#FF5F57','#FEBC2E','#28C840'].forEach((c,i)=>{
+      s+=`<circle cx="${x+14+i*13}" cy="${y+13}" r="3.8" fill="${c}"/>`;
+    });
+    s+=`<rect x="${x+58}" y="${y+7}" width="${Math.max(20,w-72)}" height="12" rx="6" fill="${st}" opacity=".12"/>`;
+    s+=linha(x+16,y+44,x+w-16,y+44,.5); s+=linha(x+16,y+58,x+w-40,y+58,.35);
+    s+=linha(x+16,y+72,x+w-28,y+72,.25);
+    s+=textBlock(n.name, cx, y+h+15, Math.floor(w/5.6), 2, 11.2, 700, PRETO,'middle',n.id,escF);
+  }
+  else if(t==='comLanding'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="34" rx="9" fill="${st}" opacity=".12"/>`;
+    s+=`<rect x="${x}" y="${y+24}" width="${w}" height="10" fill="${st}" opacity=".12"/>`;
+    s+=textBlock(n.name, cx, y+17, Math.floor((w-16)/5.8), 1, 11, 800, PRETO,'middle',n.id,escF);
+    s+=linha(x+18,y+50,x+w-18,y+50,.5); s+=linha(x+30,y+62,x+w-30,y+62,.35);
+    /* formulário e chamada para ação */
+    s+=`<rect x="${x+20}" y="${y+76}" width="${w-40}" height="16" rx="4" fill="none" stroke="${st}" stroke-width="1.2" opacity=".6"/>`;
+    s+=`<rect x="${x+20}" y="${y+98}" width="${w-40}" height="16" rx="4" fill="none" stroke="${st}" stroke-width="1.2" opacity=".6"/>`;
+    s+=`<rect x="${x+34}" y="${y+h-30}" width="${w-68}" height="20" rx="10" fill="${st}"/>`;
+    s+=`<text x="${cx}" y="${y+h-20}" text-anchor="middle" dominant-baseline="middle" font-size="${9.4*escF}" font-weight="800" fill="#fff" style="pointer-events:none">${esc(n.cta||'Quero saber mais')}</text>`;
+  }
+  else if(t==='comFormWeb'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=textBlock(n.name, x+16, y+16, Math.floor((w-30)/5.8), 1, 11.2, 800, PRETO,'start',n.id,escF);
+    for(let i=0;i<3;i++){
+      s+=`<rect x="${x+16}" y="${y+32+i*24}" width="${w-32}" height="17" rx="4" fill="none" stroke="${st}" stroke-width="1.2" opacity=".65"/>`;
+    }
+    s+=`<rect x="${x+w-84}" y="${y+h-26}" width="68" height="18" rx="9" fill="${st}"/>`;
+    s+=`<text x="${x+w-50}" y="${y+h-17}" text-anchor="middle" dominant-baseline="middle" font-size="${9*escF}" font-weight="800" fill="#fff" style="pointer-events:none">Enviar</text>`;
+  }
+  else if(t==='comBanner'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<rect x="${x}" y="${y}" width="6" height="${h}" rx="3" fill="${st}"/>`;
+    s+=textBlock('ANÚNCIO', x+18, y+18, 14, 1, 8.6, 800, st,'start',null,escF);
+    s+=textBlock(n.name, x+18, cy+6, Math.floor((w-34)/5.8), 2, 11.6, 700, PRETO,'start',n.id,escF);
+    s+=P(`M${x+w-26} ${cy-6}h12M${x+w-18} ${cy-11}l6 5l-6 5`,'none',1.6);
+  }
+  else if(t==='comQR'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    const m=Math.min(w,h), u=m/9, ox=x+(w-m)/2+u, oy=y+(h-m)/2+u;
+    const marca=(px,py)=>{
+      let g=`<rect x="${px}" y="${py}" width="${u*2.2}" height="${u*2.2}" fill="none" stroke="${st}" stroke-width="${u*0.5}"/>`;
+      g+=`<rect x="${px+u*0.75}" y="${py+u*0.75}" width="${u*0.7}" height="${u*0.7}" fill="${st}"/>`;
+      return g;
+    };
+    s+=marca(ox,oy)+marca(ox+u*4.6,oy)+marca(ox,oy+u*4.6);
+    /* miolo pontilhado, só para dar a leitura de QR */
+    [[3.4,3.4],[4.4,3.4],[3.4,4.4],[5.4,4.4],[4.4,5.4],[5.8,5.8],[3.4,6.2],[6.2,3.9]].forEach(([a,c])=>{
+      s+=`<rect x="${ox+u*a}" y="${oy+u*c}" width="${u*0.72}" height="${u*0.72}" fill="${st}" opacity=".8"/>`;
+    });
+    s+=textBlock(n.name, cx, y+h+14, Math.max(10,Math.floor(w/4.6)), 2, 10.4, 700, PRETO,'middle',n.id,escF);
+  }
+  else if(t==='comLink'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h/2}" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=P(`M${x+18} ${cy}h8M${x+34} ${cy}h8`,'none',1.6);
+    s+=P(`M${x+24} ${cy-7}a7 7 0 0 0 0 14M${x+36} ${cy-7}a7 7 0 0 1 0 14`,'none',1.6);
+    s+=textBlock(n.name, x+52, cy, cxTxt(64), 2, 10.8, 700, PRETO,'start',n.id,escF);
+  }
+
+  /* ===== campanha ===== */
+  else if(t==='comCampanha'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="5" rx="2.5" fill="${st}"/>`;
+    /* megafone */
+    s+=P(`M${x+18} ${cy-4}l16-9v26l-16-9z`,'none',1.7);
+    s+=P(`M${x+34} ${cy-13}c10 0 16 5 16 13s-6 13-16 13`,'none',1.7);
+    s+=P(`M${x+22} ${cy+9}l3 10h6l-2-10`,'none',1.4);
+    s+=textBlock('CAMPANHA', x+58, y+22, 14, 1, 8.4, 800, corMistura(st,.2),'start',null,escF);
+    s+=textBlock(n.name, x+58, cy+8, cxTxt(72), 2, 11.6, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comPublico'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<circle cx="${x+24}" cy="${y+26}" r="7" fill="none" stroke="${st}" stroke-width="1.6"/>`;
+    s+=`<circle cx="${x+42}" cy="${y+24}" r="6" fill="none" stroke="${st}" stroke-width="1.6"/>`;
+    s+=P(`M${x+12} ${y+48}c0-8 6-12 12-12s12 4 12 12M${x+38} ${y+48}c0-7 4-11 10-11`,'none',1.6);
+    s+=textBlock(n.name, x+62, y+28, cxTxt(74), 2, 11.4, 700, PRETO,'start',n.id,escF);
+    s+=textBlock(n.volume?('base: '+n.volume):'defina o recorte da base', x+16, y+h-14,
+      Math.floor((w-30)/5.2), 1, 9.6, 600, corMistura(st,.28),'start',null,escF);
+  }
+  else if(t==='comDisparo'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    /* três mensagens saindo ao mesmo tempo */
+    for(let i=0;i<3;i++){
+      s+=`<rect x="${x+16+i*7}" y="${y+18+i*11}" width="30" height="20" rx="3" fill="none" stroke="${st}" stroke-width="1.4" opacity="${1-i*0.25}"/>`;
+    }
+    s+=P(`M${x+58} ${cy}h14M${x+66} ${cy-5}l6 5l-6 5`,'none',1.7);
+    s+=textBlock(n.name, x+82, cy, cxTxt(94), 3, 11.2, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comGatilho'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h/2}" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=P(`M${x+28} ${y+16}l-11 20h8l-3 18l14-22h-8z`,st,0);
+    s+=textBlock(n.name, x+50, cy, cxTxt(62), 2, 11.2, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comTeste'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<rect x="${x+14}" y="${y+18}" width="30" height="46" rx="5" fill="none" stroke="${st}" stroke-width="1.5"/>`;
+    s+=`<rect x="${x+50}" y="${y+18}" width="30" height="46" rx="5" fill="none" stroke="${st}" stroke-width="1.5" stroke-dasharray="5,3"/>`;
+    s+=`<text x="${x+29}" y="${y+41}" text-anchor="middle" dominant-baseline="middle" font-size="${13*escF}" font-weight="800" fill="${st}" style="pointer-events:none">A</text>`;
+    s+=`<text x="${x+65}" y="${y+41}" text-anchor="middle" dominant-baseline="middle" font-size="${13*escF}" font-weight="800" fill="${st}" style="pointer-events:none">B</text>`;
+    s+=textBlock(n.name, x+92, cy, cxTxt(104), 3, 11, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comMetrica'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=P(`M${x+16} ${y+58}h56`,'none',1.4);
+    [16,26,34,20].forEach((alt,i)=>{
+      s+=`<rect x="${x+20+i*13}" y="${y+58-alt}" width="9" height="${alt}" rx="2" fill="${st}" opacity="${0.35+i*0.15}"/>`;
+    });
+    s+=textBlock(n.name, x+84, cy, cxTxt(96), 3, 11.2, 700, PRETO,'start',n.id,escF);
+  }
+
+  /* ===== retorno ===== */
+  else if(t==='comResposta'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=P(`M${x+16} ${y+22}h40a8 8 0 0 1 8 8v12a8 8 0 0 1-8 8H${x+34}l-9 7v-7h-1a8 8 0 0 1-8-8V30a8 8 0 0 1 8-8z`,'none',1.6);
+    s+=P(`M${x+22} ${y+52}l-6 6l6 6`,'none',1.6);
+    s+=textBlock(n.name, x+74, cy, cxTxt(86), 3, 11.2, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comOptIn' || t==='comOptOut'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h/2}" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<circle cx="${x+26}" cy="${cy}" r="12" fill="none" stroke="${st}" stroke-width="1.7"/>`;
+    if(t==='comOptIn') s+=P(`M${x+20} ${cy}l5 5l9-10`,'none',2);
+    else s+=P(`M${x+21} ${cy-5}l10 10M${x+31} ${cy-5}l-10 10`,'none',2);
+    s+=textBlock(n.name, x+46, cy, cxTxt(58), 2, 11.2, 700, PRETO,'start',n.id,escF);
+  }
+  else if(t==='comFalha'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<rect x="${x+16}" y="${y+22}" width="40" height="28" rx="4" fill="none" stroke="${st}" stroke-width="1.6"/>`;
+    s+=P(`M${x+17} ${y+24}l19 14l19-14`,'none',1.3);
+    s+=P(`M${x+48} ${y+46}l14 14M${x+62} ${y+46}l-14 14`,'none',2.2);
+    s+=textBlock(n.name, x+74, cy, cxTxt(86), 3, 11.2, 700, PRETO,'start',n.id,escF);
+  }
+
+  /* ===== integração ===== */
+  else if(t==='comCRM'){
+    const ry=10;
+    s+=`<path d="M${x+10} ${y+ry}V${y+h-ry-14}a${(w-20)/2} ${ry} 0 0 0 ${w-20} 0V${y+ry}" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<ellipse cx="${cx}" cy="${y+ry}" rx="${(w-20)/2}" ry="${ry}" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=P(`M${x+10} ${y+ry*2.3}a${(w-20)/2} ${ry} 0 0 0 ${w-20} 0`,'none',1.1);
+    s+=textBlock(n.name, cx, y+h-6, Math.floor(w/5.4), 2, 10.8, 700, PRETO,'middle',n.id,escF);
+  }
+  else if(t==='comApiCom'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h/2}" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    s+=`<circle cx="${x+16}" cy="${cy}" r="4.5" fill="${st}"/><circle cx="${x+w-16}" cy="${cy}" r="4.5" fill="${st}"/>`;
+    s+=P(`M${x+22} ${cy}h10M${x+w-32} ${cy}h10`,'none',1.5);
+    s+=textBlock(n.name, cx, cy, cxTxt(72), 2, 11, 700, PRETO,'middle',n.id,escF);
+  }
+  else if(t==='comFilaCom'){
+    s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${fill}" stroke="${st}" stroke-width="${sw}"/>`;
+    for(let i=0;i<4;i++){
+      s+=`<rect x="${x+12+i*12}" y="${y+12}" width="8" height="${h-24}" rx="2" fill="${st}" opacity="${.5-i*.09}"/>`;
+    }
+    s+=P(`M${x+w-24} ${cy}h10M${x+w-18} ${cy-4}l5 4l-5 4`,'none',1.6);
+    s+=textBlock(n.name, x+70, cy, cxTxt(96), 2, 10.8, 700, PRETO,'start',n.id,escF);
+  }
+
+  return s;
+}
+
+/* o desenho das novas formas entra sem reescrever formaExtraSVG */
+(function(){
+  if(typeof formaExtraSVG!=='function' || formaExtraSVG._v32) return;
+  const orig=formaExtraSVG;
+  const novo=function(n, st, sw, fill, escF){
+    if(T[n.type] && T[n.type].fam==='com') return formaComunicacaoSVG(n, st, sw, fill, escF);
+    return orig.apply(this, arguments);
+  };
+  novo._v32=true;
+  formaExtraSVG=novo;
+})();
+
+/* a família nova é decorativa: fica fora das regras BPMN, como as demais */
+(function(){
+  if(typeof ehFamiliaMercado!=='function' || ehFamiliaMercado._v32) return;
+  const orig=ehFamiliaMercado;
+  const novo=function(t){
+    if(T[t] && T[t].fam==='com') return false;   /* tem desenho próprio */
+    return orig.apply(this, arguments);
+  };
+  novo._v32=true;
+  ehFamiliaMercado=novo;
+})();
+
+/* =========================================================================
+   8) ÍCONES DE INTERNET
+   ========================================================================= */
+Object.assign(T, {
+  icoNavegador : {fam:'icon', cat:'icon', g:'Internet', label:'Navegador',    w:64,h:64, stroke:CM_AZUL,  sw:2, fill:'transparent', tip:'Acesso pelo navegador — site, portal ou web app.'},
+  icoGlobo     : {fam:'icon', cat:'icon', g:'Internet', label:'Internet',     w:64,h:64, stroke:CM_AZUL,  sw:2, fill:'transparent', tip:'Rede pública, alcance externo, ambiente aberto.'},
+  icoWifi      : {fam:'icon', cat:'icon', g:'Internet', label:'Conexão',      w:64,h:64, stroke:CM_TURQ,  sw:2, fill:'transparent', tip:'Conectividade, sinal ou disponibilidade de rede.'},
+  icoLinkNet   : {fam:'icon', cat:'icon', g:'Internet', label:'Link',         w:64,h:64, stroke:CM_AZUL,  sw:2, fill:'transparent', tip:'Endereço que leva a outro conteúdo.'},
+  icoNuvemNet  : {fam:'icon', cat:'icon', g:'Internet', label:'Nuvem',        w:64,h:64, stroke:CM_TURQ,  sw:2, fill:'transparent', tip:'Serviço hospedado fora da empresa.'},
+  icoDownload  : {fam:'icon', cat:'icon', g:'Internet', label:'Download',     w:64,h:64, stroke:CM_VERDE, sw:2, fill:'transparent', tip:'Baixar arquivo ou receber dados.'},
+  icoUpload    : {fam:'icon', cat:'icon', g:'Internet', label:'Upload',       w:64,h:64, stroke:CM_AMBAR, sw:2, fill:'transparent', tip:'Enviar arquivo ou publicar conteúdo.'},
+  icoServidorN : {fam:'icon', cat:'icon', g:'Internet', label:'Servidor',     w:64,h:64, stroke:CM_CINZA, sw:2, fill:'transparent', tip:'Máquina que hospeda o serviço.'},
+  icoApiNet    : {fam:'icon', cat:'icon', g:'Internet', label:'API',          w:64,h:64, stroke:CM_ROXO,  sw:2, fill:'transparent', tip:'Integração programática entre sistemas.'},
+  icoCarrinho  : {fam:'icon', cat:'icon', g:'Internet', label:'E-commerce',   w:64,h:64, stroke:CM_VERDE, sw:2, fill:'transparent', tip:'Compra ou venda pela internet.'},
+  icoQrNet     : {fam:'icon', cat:'icon', g:'Internet', label:'QR Code',      w:64,h:64, stroke:CM_CINZA, sw:2, fill:'transparent', tip:'Ponte do impresso para o digital.'},
+  icoCadeadoN  : {fam:'icon', cat:'icon', g:'Internet', label:'Site seguro',  w:64,h:64, stroke:CM_VERDE, sw:2, fill:'transparent', tip:'Conexão protegida, certificado válido.'},
+  icoNotifNet  : {fam:'icon', cat:'icon', g:'Internet', label:'Notificação',  w:64,h:64, stroke:CM_AMBAR, sw:2, fill:'transparent', tip:'Aviso enviado ao usuário.'},
+  icoChatNet   : {fam:'icon', cat:'icon', g:'Internet', label:'Chat',         w:64,h:64, stroke:CM_VERDE, sw:2, fill:'transparent', tip:'Conversa em tempo real.'},
+  icoCompart   : {fam:'icon', cat:'icon', g:'Internet', label:'Compartilhar', w:64,h:64, stroke:CM_ROXO,  sw:2, fill:'transparent', tip:'Encaminhar conteúdo a outra pessoa ou canal.'},
+  icoSemRede   : {fam:'icon', cat:'icon', g:'Internet', label:'Sem conexão',  w:64,h:64, stroke:CM_VERM,  sw:2, fill:'transparent', tip:'Indisponibilidade de rede ou serviço fora do ar.'}
+});
+
+/* traçados dos novos ícones, na mesma caixa 64×64 dos existentes */
+function desenhoIconeInternet(t, c){
+  const S=`fill="none" stroke="${c}" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"`;
+  const F=`fill="${c}"`;
+  switch(t){
+    case 'icoNavegador':
+      return `<rect x="7" y="12" width="50" height="40" rx="5" ${S}/>`
+           + `<path d="M7 24h50" ${S}/>`
+           + `<circle cx="15" cy="18" r="2.4" ${F}/><circle cx="23" cy="18" r="2.4" ${F}/><circle cx="31" cy="18" r="2.4" ${F}/>`
+           + `<path d="M39 18h13" ${S}/>`;
+    case 'icoGlobo':
+      return `<circle cx="32" cy="32" r="23" ${S}/>`
+           + `<path d="M9 32h46M32 9c7 7 7 39 0 46M32 9c-7 7-7 39 0 46" ${S}/>`;
+    case 'icoWifi':
+      return `<path d="M10 26a32 32 0 0 1 44 0" ${S}/>`
+           + `<path d="M18 35a21 21 0 0 1 28 0" ${S}/>`
+           + `<path d="M26 44a10 10 0 0 1 12 0" ${S}/>`
+           + `<circle cx="32" cy="52" r="3" ${F}/>`;
+    case 'icoLinkNet':
+      return `<path d="M27 37a10 10 0 0 1 0-14l7-7a10 10 0 0 1 14 14l-4 4" ${S}/>`
+           + `<path d="M37 27a10 10 0 0 1 0 14l-7 7a10 10 0 0 1-14-14l4-4" ${S}/>`;
+    case 'icoNuvemNet':
+      return `<path d="M20 46a11 11 0 0 1 1-22a15 15 0 0 1 28 4a9 9 0 0 1-1 18z" ${S}/>`;
+    case 'icoDownload':
+      return `<path d="M32 10v28" ${S}/><path d="M21 29l11 11l11-11" ${S}/>`
+           + `<path d="M11 46v6h42v-6" ${S}/>`;
+    case 'icoUpload':
+      return `<path d="M32 40V12" ${S}/><path d="M21 23l11-11l11 11" ${S}/>`
+           + `<path d="M11 46v6h42v-6" ${S}/>`;
+    case 'icoServidorN':
+      return `<rect x="9" y="12" width="46" height="16" rx="3" ${S}/>`
+           + `<rect x="9" y="36" width="46" height="16" rx="3" ${S}/>`
+           + `<circle cx="18" cy="20" r="2.6" ${F}/><circle cx="18" cy="44" r="2.6" ${F}/>`
+           + `<path d="M27 20h20M27 44h20" ${S}/>`;
+    case 'icoApiNet':
+      return `<path d="M22 20L10 32l12 12M42 20l12 12l-12 12" ${S}/>`
+           + `<path d="M36 16L28 48" ${S}/>`;
+    case 'icoCarrinho':
+      return `<path d="M8 12h7l6 26h26l6-19H19" ${S}/>`
+           + `<circle cx="24" cy="50" r="4" ${S}/><circle cx="44" cy="50" r="4" ${S}/>`;
+    case 'icoQrNet':
+      return `<rect x="9" y="9" width="17" height="17" ${S}/><rect x="38" y="9" width="17" height="17" ${S}/>`
+           + `<rect x="9" y="38" width="17" height="17" ${S}/>`
+           + `<path d="M38 38h8v8M54 46v9h-9M38 55h1" ${S}/>`;
+    case 'icoCadeadoN':
+      return `<rect x="14" y="28" width="36" height="26" rx="4" ${S}/>`
+           + `<path d="M23 28v-7a9 9 0 0 1 18 0v7" ${S}/>`
+           + `<circle cx="32" cy="41" r="3" ${F}/>`;
+    case 'icoNotifNet':
+      return `<path d="M32 10a13 13 0 0 1 13 13c0 12 5 15 5 19H14c0-4 5-7 5-19a13 13 0 0 1 13-13z" ${S}/>`
+           + `<path d="M27 47a5 5 0 0 0 10 0" ${S}/>`;
+    case 'icoChatNet':
+      return `<path d="M12 14h40a5 5 0 0 1 5 5v20a5 5 0 0 1-5 5H28l-11 9v-9h-5a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5z" ${S}/>`
+           + `<circle cx="23" cy="29" r="2.6" ${F}/><circle cx="32" cy="29" r="2.6" ${F}/><circle cx="41" cy="29" r="2.6" ${F}/>`;
+    case 'icoCompart':
+      return `<circle cx="48" cy="15" r="7" ${S}/><circle cx="16" cy="32" r="7" ${S}/><circle cx="48" cy="49" r="7" ${S}/>`
+           + `<path d="M22 28l20-10M22 36l20 10" ${S}/>`;
+    case 'icoSemRede':
+      return `<path d="M10 26a32 32 0 0 1 44 0" ${S} opacity=".4"/>`
+           + `<path d="M18 35a21 21 0 0 1 28 0" ${S} opacity=".55"/>`
+           + `<path d="M14 14l36 36" ${S}/>`
+           + `<circle cx="32" cy="50" r="3" ${F}/>`;
+    default: return null;
+  }
+}
+
+(function(){
+  if(typeof desenhoIcone!=='function' || desenhoIcone._v32) return;
+  const orig=desenhoIcone;
+  const novo=function(t, c){
+    const d=desenhoIconeInternet(t, c);
+    if(d) return d;
+    return orig.apply(this, arguments);
+  };
+  novo._v32=true;
+  desenhoIcone=novo;
+})();
+
+/* =========================================================================
+   9) MODELO PRONTO DE FLUXO DE COMUNICAÇÃO
+   ========================================================================= */
+if(typeof TEMPLATES!=='undefined' && Array.isArray(TEMPLATES)){
+  TEMPLATES.push(
+  {id:'com-branco', fam:'com', nome:'Fluxo de comunicação em branco',
+   desc:'Um público e um canal para começar o desenho.',
+   montar(){
+     return {pools:[], nodes:[
+       _no('comPublico', 120, 200, 'Público-alvo'),
+       _no('comWhatsapp', 420, 200, 'Canal')
+     ], edges:[], meta:{nome:'Fluxo de comunicação'}};
+   }},
+  {id:'com-campanha', fam:'com', nome:'Campanha multicanal',
+   desc:'Gatilho, público, três canais, landing page e medição — a jornada completa.',
+   montar(){
+     const g=_no('comGatilho', 60, 240, 'Cliente sem compra há 60 dias');
+     const p=_no('comPublico', 280, 232, 'Base inativa · 12 mil');
+     const c=_no('comCampanha', 500, 230, 'Reativação de base');
+     const w=_no('comWhatsapp', 760, 110, 'Mensagem no WhatsApp');
+     const e=_no('comEmail',    760, 230, 'E-mail com oferta');
+     const s=_no('comSms',      760, 350, 'SMS de lembrete');
+     const l=_no('comLanding', 1030, 180, 'Landing da oferta');
+     const f=_no('comFormWeb', 1030, 380, 'Formulário de interesse');
+     const m=_no('comMetrica', 1280, 190, 'Cliques e conversão');
+     const o=_no('comOptOut',  1280, 340, 'Descadastro');
+     const crm=_no('comCRM',   1280, 450, 'Atualizar CRM');
+     const nodes=[g,p,c,w,e,s,l,f,m,o,crm];
+     const eds=[
+       _lig(g.id,p.id), _lig(p.id,c.id),
+       _lig(c.id,w.id), _lig(c.id,e.id), _lig(c.id,s.id),
+       _lig(w.id,l.id), _lig(e.id,l.id), _lig(s.id,l.id),
+       _lig(l.id,f.id), _lig(l.id,m.id), _lig(f.id,crm.id), _lig(e.id,o.id,'quem recusa'),
+       _lig(o.id,crm.id)
+     ];
+     nodes.push(_no('textAnnotation', 60, 420,
+       'O descadastro é obrigatório em todo disparo. Registre no CRM antes do próximo ciclo.', {w:200, h:70}));
+     return {pools:[], nodes, edges:eds,
+       meta:{nome:'Campanha de reativação', tipo:'TO-BE',
+             objetivo:'Reativar clientes inativos com uma sequência multicanal medida.'}};
+   }},
+  {id:'com-atendimento', fam:'com', nome:'Atendimento por canais',
+   desc:'Entrada por WhatsApp, chatbot, triagem e escalonamento para atendimento humano.',
+   montar(){
+     const l1=nid('lane'), l2=nid('lane');
+     const pool={id:nid('pool'),type:'pool',name:'Atendimento ao cliente',orient:'h',x:60,y:60,w:1320,h:400,
+       lanes:[{id:l1,name:'Automático',h:200,w:260},{id:l2,name:'Atendente',h:200,w:260}]};
+     const a=_no('comWhatsapp', 150, 110, 'Cliente escreve');
+     const b=_no('comChatbot',  400, 106, 'Assistente responde');
+     const g=_no('exclusiveGateway', 660, 130, 'Resolvido?');
+     const c=_no('comMetrica',  820, 108, 'Registrar solução');
+     const d=_no('comResposta', 400, 300, 'Atendente assume');
+     const e=_no('comCRM',      700, 296, 'Atualizar histórico');
+     const f=_no('endEvent',   1050, 320, 'Atendimento encerrado');
+     [a,b,g,c].forEach(n=>n.laneId=l1);
+     [d,e,f].forEach(n=>n.laneId=l2);
+     return {pools:[pool], nodes:[a,b,g,c,d,e,f],
+       edges:[_lig(a.id,b.id), _lig(b.id,g.id),
+              _lig(g.id,c.id,'Sim','conditionalFlow'),
+              _lig(g.id,d.id,'Não','conditionalFlow'),
+              _lig(d.id,e.id), _lig(e.id,f.id), _lig(c.id,f.id)],
+       meta:{nome:'Atendimento por canais digitais', tipo:'AS-IS'}};
+   }});
+}
+
+/* =========================================================================
+   10) BOTÃO NA BARRA E ATALHOS
+   ========================================================================= */
+function initV32(){
+  /* botão "Processos" ao lado das ferramentas de organização */
+  const alvo=$('#tbPropor') || $('#tbAuto');
+  if(alvo && alvo.parentNode && !$('#tbProcessos')){
+    const b=document.createElement('button');
+    b.className='tbtn'; b.id='tbProcessos';
+    b.title='Processos do desenho — nomear páginas, agrupamentos e raias, e navegar entre eles (Alt+P)';
+    b.innerHTML='⧉ Processos';
+    b.onclick=modalProcessos;
+    alvo.parentNode.insertBefore(b, alvo.nextSibling);
+  }
+
+  /* menu de contexto ganha as ações de vínculo */
+  if(typeof abrirCtx==='function' && !abrirCtx._v32lk){
+    const orig=abrirCtx;
+    const novo=function(ev, alvoId, extra){
+      orig.call(this, ev, alvoId, extra);
+      const m=$('#ctxMenu'); if(!m) return;
+      const o=alvoId?byId(alvoId):null;
+      if(!o || o.lanes || o.source) return;
+      let h=`<div class="ctx-sep"></div>`;
+      if(o.refProc && o.refProc.id){
+        h+=`<button class="ctx-i" data-ctx="lkAbrirProc"><span class="ctx-ico">⧉</span>`
+          +`<span class="ctx-txt">Abrir “${esc(rotuloProcesso(o.refProc))}”</span></button>`;
+      }
+      if(o.url){
+        h+=`<button class="ctx-i" data-ctx="lkAbrirUrl"><span class="ctx-ico">↗</span>`
+          +`<span class="ctx-txt">Abrir o endereço</span></button>`;
+      }
+      h+=`<button class="ctx-i" data-ctx="lkVincular"><span class="ctx-ico">🔗</span>`
+        +`<span class="ctx-txt">Links e navegação…</span></button>`;
+      h+=`<button class="ctx-i" data-ctx="lkNovaPg"><span class="ctx-ico">＋</span>`
+        +`<span class="ctx-txt">Criar página e vincular</span></button>`;
+      m.innerHTML=m.innerHTML+h;
+      m.querySelectorAll('[data-ctx]').forEach(b=>{
+        if(b.disabled) return;
+        b.onclick=()=>{ const a=b.dataset.ctx; fecharCtx(); execCtx(a); };
+      });
+    };
+    novo._v32lk=true;
+    abrirCtx=novo;
+  }
+
+  if(typeof execCtx==='function' && !execCtx._v32lk){
+    const orig=execCtx;
+    const novo=function(acao){
+      const alvo=(typeof ctxAlvo!=='undefined' && ctxAlvo) ? ctxAlvo : {};
+      const o=alvo.id?byId(alvo.id):null;
+      if(acao==='lkAbrirProc'){ if(o&&o.refProc) irParaProcesso(o.refProc); return; }
+      if(acao==='lkAbrirUrl'){ if(o&&o.url) abrirURL(o.url); return; }
+      if(acao==='lkNovaPg'){ if(o) criarPaginaVinculada(o); return; }
+      if(acao==='lkVincular'){
+        if(o){
+          setSel(o.id);
+          if(typeof abaProps!=='undefined') abaProps='atividade';
+          render(); renderProps();
+          const sec=$('#props [data-sec="sLinks"]');
+          if(sec){ sec.classList.remove('fechada'); if(sec.scrollIntoView) sec.scrollIntoView({block:'nearest'}); }
+          const i=$('#lk_url'); if(i) i.focus();
+        }
+        return;
+      }
+      return orig.apply(this, arguments);
+    };
+    novo._v32lk=true;
+    execCtx=novo;
+  }
+
+  /* atalhos */
+  document.addEventListener('keydown', e=>{
+    const digitando=['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName);
+    if(digitando) return;
+    const k=String(e.key||'').toLowerCase();
+    if(e.altKey && k==='p'){ e.preventDefault(); modalProcessos(); return; }
+    /* Enter no elemento selecionado segue o vínculo, se houver */
+    if(k==='enter' && !e.ctrlKey && !e.metaKey && selection.size===1){
+      const o=byId([...selection][0]);
+      if(temVinculo(o)){
+        e.preventDefault();
+        if(o.refProc && o.refProc.id) irParaProcesso(o.refProc);
+        else abrirURL(o.url);
+      }
+    }
+  });
+}
+
+/* =========================================================================
+   11) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  .lk-linha{display:flex;gap:5px;align-items:center}
+  .lk-linha input{flex:1;min-width:0}
+  .lk-linha .btn{flex:0 0 34px;justify-content:center;font-weight:800}
+  .lk-tit{display:block;font-size:10.5px;font-weight:700;color:var(--txt2);
+    margin-bottom:3px;letter-spacing:.2px}
+  .lk-bts{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:7px}
+  .lk-ok{background:#F1EFFA;border:1px solid #DEDCF7;border-radius:8px;
+    padding:7px 10px;font-size:11.3px;color:#4A3E85;line-height:1.45;margin-bottom:2px}
+  .lk-ok b{color:#372E70}
+  .lk-alerta{background:#FDF8EF;border:1px solid #F0DDA8;border-radius:8px;
+    padding:7px 10px;font-size:11.3px;color:#8A6D1F;line-height:1.45;margin-bottom:2px}
+  .lk-bolha{font-style:normal;color:var(--sel);font-size:15px;line-height:1;margin-left:3px}
+  .pr-grupo{font-size:10px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;
+    color:var(--txt3);margin:14px 0 5px}
+  .pr-nome{width:100%;border:1px solid var(--line2);border-radius:7px;padding:5px 8px;
+    font-weight:600;font-size:12px;outline:none;background:#fff}
+  .pr-nome:focus{border-color:var(--acao);box-shadow:0 0 0 3px rgba(61,81,66,.10)}
+  #tbProcessos.on{background:var(--acao);color:#fff}`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   12) ARRANQUE
+   ========================================================================= */
+(function(){
+  function arrancar(){
+    try{ initV32(); }catch(e){}
+    try{ if(typeof buildPalette==='function') buildPalette(); }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,560));
+  else setTimeout(arrancar,560);
+})();
+
+</script>
+
 </body></html>
