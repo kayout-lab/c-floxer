@@ -20449,4 +20449,429 @@ function injetarAcoesPiscina(){
 
 </script>
 
+
+<script>
+/* =========================================================================
+   C-Floxer v34 — O menu do botão direito deixa de ser cortado
+
+   Duas causas somadas:
+
+   (a) `abrirCtx` media e posicionava o menu ANTES de as extensões da v32 e
+       da v33 acrescentarem os itens de link e de piscina. O menu crescia
+       depois de posicionado, e o excedente ficava fora da conta.
+
+   (b) `.canvas-wrap` tem `overflow:hidden` e o menu não tinha altura máxima
+       nem rolagem. Quando a lista passava da altura da área de desenho,
+       `y` colapsava em 8 e o resto era simplesmente cortado — sem aviso e
+       sem como alcançar os itens de baixo.
+
+   A correção mede o menu depois de tudo pronto, limita a altura ao espaço
+   real, liga a rolagem interna e vira o menu para o lado que couber.
+   O bloco "Converter para" passa a ser um submenu.
+
+   Nada anterior é removido: tudo aqui corrige ou acrescenta.
+   ========================================================================= */
+
+/* guarda o ponto do clique para reposicionar sem depender do evento */
+let _ctxPonto={x:0, y:0};
+let _ctxNivel='raiz';      /* raiz | converter */
+let _ctxRaizHTML='';       /* o menu principal, para o botão Voltar */
+
+/* =========================================================================
+   1) POSICIONAMENTO QUE RESPEITA O ESPAÇO DISPONÍVEL
+   ========================================================================= */
+function posicionarCtx(){
+  const m=$('#ctxMenu'); if(!m || !m.classList.contains('show')) return;
+  const wrap=$('#canvasWrap'); if(!wrap) return;
+
+  const MARGEM=8;
+  const dispW=wrap.clientWidth  - MARGEM*2;
+  const dispH=wrap.clientHeight - MARGEM*2;
+
+  /* mede livre, sem restrição herdada da abertura anterior */
+  m.classList.remove('ctx-rola','ctx-compacto');
+  m.style.maxHeight='none';
+  m.style.maxWidth='none';
+
+  let mw=m.offsetWidth, mh=m.offsetHeight;
+
+  /* área muito baixa: aperta o espaçamento antes de recorrer à rolagem */
+  if(mh>dispH && dispH<420){
+    m.classList.add('ctx-compacto');
+    mh=m.offsetHeight;
+  }
+
+  /* ainda não cabe: limita e liga a rolagem interna */
+  if(mh>dispH){
+    m.classList.add('ctx-rola');
+    m.style.maxHeight=Math.max(140, dispH)+'px';
+    mh=m.offsetHeight;
+  }
+  if(mw>dispW){
+    m.style.maxWidth=Math.max(180, dispW)+'px';
+    mw=m.offsetWidth;
+  }
+
+  const px=_ctxPonto.x, py=_ctxPonto.y;
+
+  /* horizontal: abre à direita; se não couber, à esquerda; senão, encosta */
+  let x=px+2;
+  if(x+mw > wrap.clientWidth-MARGEM){
+    const àEsquerda=px-mw-4;
+    x = (àEsquerda>=MARGEM) ? àEsquerda : Math.max(MARGEM, wrap.clientWidth-mw-MARGEM);
+  }
+
+  /* vertical: abre para baixo; se não couber, para cima a partir do clique;
+     se ainda não couber, encosta no topo — agora com rolagem, nada se perde */
+  let y=py+2;
+  if(y+mh > wrap.clientHeight-MARGEM){
+    const acima=py-mh-4;
+    y = (acima>=MARGEM) ? acima : Math.max(MARGEM, wrap.clientHeight-mh-MARGEM);
+  }
+
+  m.style.left=Math.round(Math.max(MARGEM,x))+'px';
+  m.style.top =Math.round(Math.max(MARGEM,y))+'px';
+
+  /* mantém o item ativo à vista quando o menu abre rolado */
+  if(m.classList.contains('ctx-rola')) m.scrollTop=0;
+  atualizarSombraCtx();
+}
+
+/* sombra nas bordas avisa que há mais itens fora da vista */
+function atualizarSombraCtx(){
+  const m=$('#ctxMenu'); if(!m) return;
+  if(!m.classList.contains('ctx-rola')){
+    m.classList.remove('rola-cima','rola-baixo');
+    return;
+  }
+  const topo=m.scrollTop>4;
+  const base=m.scrollTop < m.scrollHeight-m.clientHeight-4;
+  m.classList.toggle('rola-cima', topo);
+  m.classList.toggle('rola-baixo', base);
+}
+
+/* =========================================================================
+   2) SUBMENU "CONVERTER PARA"
+   ========================================================================= */
+
+/* todos os destinos possíveis, agrupados como no painel de propriedades */
+function destinosConversao(o){
+  if(!o || !T[o.type]) return {};
+  const fam=T[o.type].fam||'bpmn';
+  const grupos={};
+  Object.keys(T).forEach(k=>{
+    if(k===o.type) return;
+    const d=T[k];
+    if((d.fam||'bpmn')!==fam) return;
+    if(k==='pool'||k==='image'||k==='table') return;
+    if(d.cat==='pool'||d.cat==='lane') return;
+    const g=d.g || (d.cat==='activity'?'Atividades'
+              : d.cat==='gateway'?'Decisões'
+              : d.cat==='event'?'Eventos'
+              : d.cat==='artifact'?'Artefatos':'Outros');
+    (grupos[g]=grupos[g]||[]).push(k);
+  });
+  return grupos;
+}
+
+/* o elemento aceita conversão? */
+function podeMostrarConversao(o){
+  if(!o || o.lanes || o.source) return false;
+  if(selection.size>1) return false;
+  if(!T[o.type]) return false;
+  const cat=T[o.type].cat;
+  return ['activity','gateway','event'].includes(cat);
+}
+
+/* troca o bloco inline por um único item que abre o submenu */
+function agruparConversao(m, o){
+  if(!m || !podeMostrarConversao(o)) return;
+
+  /* remove o título e os itens `conv:` que o menu original enfileirava */
+  const antigos=[...m.querySelectorAll('[data-ctx^="conv:"]')];
+  let titulo=null;
+  if(antigos.length){
+    let p=antigos[0].previousElementSibling;
+    while(p && !p.classList.contains('ctx-tit')) p=p.previousElementSibling;
+    if(p && /converter/i.test(p.textContent||'')) titulo=p;
+  } else {
+    titulo=[...m.querySelectorAll('.ctx-tit')].find(t=>/converter/i.test(t.textContent||''));
+  }
+  const ancora = titulo || (antigos[0]||null);
+  const marcador=document.createElement('div');
+  if(ancora && ancora.parentNode) ancora.parentNode.insertBefore(marcador, ancora);
+
+  antigos.forEach(b=>b.remove());
+  if(titulo) titulo.remove();
+
+  const total=Object.values(destinosConversao(o)).reduce((a,l)=>a+l.length,0);
+  const item=document.createElement('button');
+  item.className='ctx-i';
+  item.dataset.ctx='convMenu';
+  item.innerHTML=`<span class="ctx-ico">⇄</span>`
+    +`<span class="ctx-txt">Converter para…</span>`
+    +`<span class="ctx-key">${total}</span>`
+    +`<span class="ctx-seta">▸</span>`;
+
+  if(marcador.parentNode) marcador.parentNode.replaceChild(item, marcador);
+  else m.appendChild(item);
+}
+
+/* desenha o submenu no lugar do menu, com caminho de volta */
+function abrirSubConversao(){
+  const m=$('#ctxMenu'); if(!m) return;
+  const o=(ctxAlvo && ctxAlvo.id) ? byId(ctxAlvo.id) : null;
+  if(!o){ fecharCtx(); return; }
+
+  _ctxRaizHTML=m.innerHTML;
+  _ctxNivel='converter';
+
+  const grupos=destinosConversao(o);
+  const atual=T[o.type] ? T[o.type].label : '';
+  let h=`<button class="ctx-i ctx-voltar" data-ctx="convVoltar">
+      <span class="ctx-ico">‹</span>
+      <span class="ctx-txt">Voltar</span>
+    </button>
+    <div class="ctx-sep"></div>
+    <div class="ctx-tit">Converter “${esc(String(o.name||atual).slice(0,26))}”</div>
+    <div class="ctx-atual">hoje é <b>${esc(atual)}</b></div>`;
+
+  const nomes=Object.keys(grupos);
+  if(!nomes.length){
+    h+=`<div class="ctx-vazio">Não há outro tipo compatível para este elemento.</div>`;
+  } else {
+    nomes.forEach(g=>{
+      h+=`<div class="ctx-tit">${esc(g)}</div>`;
+      grupos[g].forEach(k=>{
+        h+=`<button class="ctx-i" data-ctx="conv:${k}" title="${esc(T[k].tip||T[k].label)}">
+            <span class="ctx-ico">▸</span>
+            <span class="ctx-txt">${esc(T[k].label)}</span>
+          </button>`;
+      });
+    });
+  }
+  m.innerHTML=h;
+  ligarItensCtx(m);
+  posicionarCtx();
+}
+
+/* volta ao menu principal sem perder o alvo */
+function voltarRaizCtx(){
+  const m=$('#ctxMenu'); if(!m || !_ctxRaizHTML) { fecharCtx(); return; }
+  m.innerHTML=_ctxRaizHTML;
+  _ctxNivel='raiz';
+  ligarItensCtx(m);
+  posicionarCtx();
+}
+
+/* =========================================================================
+   3) LIGAÇÃO DOS ITENS
+   O menu original liga os cliques logo após montar. Como a v32, a v33 e
+   este bloco mexem no HTML depois, a ligação precisa ser refeita — e as
+   ações de navegação não podem fechar o menu.
+   ========================================================================= */
+function ligarItensCtx(m){
+  m.querySelectorAll('[data-ctx]').forEach(b=>{
+    if(b.disabled) return;
+    b.onclick=ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      const a=b.dataset.ctx;
+      if(a==='convMenu'){ abrirSubConversao(); return; }
+      if(a==='convVoltar'){ voltarRaizCtx(); return; }
+      fecharCtx();
+      execCtx(a);
+    };
+  });
+}
+
+/* =========================================================================
+   4) O ENVOLTÓRIO — roda depois de todas as extensões
+   ========================================================================= */
+(function(){
+  if(typeof abrirCtx!=='function' || abrirCtx._v34) return;
+  const orig=abrirCtx;
+  const novo=function(ev, alvoId, extra){
+    /* deixa a v32 e a v33 acrescentarem tudo o que têm */
+    orig.call(this, ev, alvoId, extra);
+
+    const m=$('#ctxMenu'); if(!m) return;
+    const wrap=$('#canvasWrap'), host=$('#svgHost');
+    if(wrap && host && ev && ev.clientX!=null){
+      const r=host.getBoundingClientRect();
+      _ctxPonto={x:ev.clientX-r.left, y:ev.clientY-r.top};
+    }
+    _ctxNivel='raiz'; _ctxRaizHTML='';
+
+    const o=alvoId?byId(alvoId):null;
+
+    /* o bloco de conversão vira submenu; se o menu original não o trouxe
+       (decisões e eventos), ele é acrescentado aqui */
+    try{
+      if(podeMostrarConversao(o) && !m.querySelector('[data-ctx="convMenu"]')){
+        if(m.querySelector('[data-ctx^="conv:"]')) agruparConversao(m, o);
+        else agruparConversaoVazia(m, o);
+      }
+    }catch(e){}
+
+    /* religa tudo, inclusive o que a v32 e a v33 acrescentaram */
+    try{ ligarItensCtx(m); }catch(e){}
+    /* mede e posiciona agora que o menu está completo */
+    try{ posicionarCtx(); }catch(e){}
+  };
+  novo._v34=true;
+  abrirCtx=novo;
+})();
+
+/* insere o item de conversão em elementos que não tinham o bloco */
+function agruparConversaoVazia(m, o){
+  const total=Object.values(destinosConversao(o)).reduce((a,l)=>a+l.length,0);
+  if(!total) return;
+  const item=document.createElement('button');
+  item.className='ctx-i';
+  item.dataset.ctx='convMenu';
+  item.innerHTML=`<span class="ctx-ico">⇄</span>`
+    +`<span class="ctx-txt">Converter para…</span>`
+    +`<span class="ctx-key">${total}</span>`
+    +`<span class="ctx-seta">▸</span>`;
+  /* antes do bloco de exclusão, que é sempre o fim do menu */
+  const excluir=m.querySelector('[data-ctx="excluir"]');
+  if(excluir){
+    const sep=document.createElement('div'); sep.className='ctx-sep';
+    let ancora=excluir;
+    const ant=excluir.previousElementSibling;
+    if(ant && ant.classList.contains('ctx-sep')) ancora=ant;
+    m.insertBefore(item, ancora);
+    m.insertBefore(sep, item);
+  } else {
+    m.appendChild(item);
+  }
+}
+
+/* fechar limpa o estado do submenu */
+(function(){
+  if(typeof fecharCtx!=='function' || fecharCtx._v34) return;
+  const orig=fecharCtx;
+  const novo=function(){
+    _ctxNivel='raiz'; _ctxRaizHTML='';
+    return orig.apply(this, arguments);
+  };
+  novo._v34=true;
+  fecharCtx=novo;
+})();
+
+/* =========================================================================
+   5) COMPORTAMENTO: ROLAGEM, TECLADO E REDIMENSIONAMENTO
+   ========================================================================= */
+(function(){
+  function ligar(){
+    const m=$('#ctxMenu'); if(!m || m._v34lig) return;
+    m._v34lig=true;
+
+    /* a roda rola o menu; sem isto, o canvas daria zoom por baixo */
+    m.addEventListener('wheel', ev=>{
+      if(m.classList.contains('ctx-rola')){
+        ev.stopPropagation();
+        const noTopo   = m.scrollTop<=0 && ev.deltaY<0;
+        const naBase   = m.scrollTop >= m.scrollHeight-m.clientHeight && ev.deltaY>0;
+        if(!noTopo && !naBase) ev.preventDefault();
+      } else {
+        ev.stopPropagation(); ev.preventDefault();
+      }
+    }, {passive:false});
+
+    m.addEventListener('scroll', atualizarSombraCtx);
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',ligar);
+  else ligar();
+  setTimeout(ligar, 700);
+
+  /* Esc no submenu volta um nível antes de fechar; setas percorrem os itens */
+  document.addEventListener('keydown', ev=>{
+    const m=$('#ctxMenu');
+    if(!m || !m.classList.contains('show')) return;
+    const k=String(ev.key||'');
+
+    if(k==='Escape'){
+      if(_ctxNivel==='converter'){ ev.preventDefault(); ev.stopPropagation(); voltarRaizCtx(); }
+      return;
+    }
+    if(k==='ArrowLeft' && _ctxNivel==='converter'){
+      ev.preventDefault(); voltarRaizCtx(); return;
+    }
+
+    const itens=[...m.querySelectorAll('.ctx-i:not(:disabled)')];
+    if(!itens.length) return;
+    const atual=itens.findIndex(b=>b.classList.contains('ctx-foco'));
+
+    if(k==='ArrowDown' || k==='ArrowUp'){
+      ev.preventDefault();
+      const passo = k==='ArrowDown' ? 1 : -1;
+      const i = atual<0 ? (passo>0?0:itens.length-1) : (atual+passo+itens.length)%itens.length;
+      itens.forEach(b=>b.classList.remove('ctx-foco'));
+      itens[i].classList.add('ctx-foco');
+      if(itens[i].scrollIntoView) itens[i].scrollIntoView({block:'nearest'});
+      atualizarSombraCtx();
+      return;
+    }
+    if((k==='Enter' || k==='ArrowRight') && atual>=0){
+      ev.preventDefault();
+      itens[atual].click();
+    }
+  }, true);
+
+  /* redimensionar a janela pode invalidar a posição calculada */
+  window.addEventListener('resize', ()=>{ try{ posicionarCtx(); }catch(e){} });
+})();
+
+/* =========================================================================
+   6) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  /* o menu passa a poder rolar por dentro, em vez de ser cortado por fora */
+  #ctxMenu{overflow:visible;overscroll-behavior:contain}
+  #ctxMenu.ctx-rola{
+    overflow-y:auto;overflow-x:hidden;
+    scrollbar-width:thin;scrollbar-color:var(--line2) transparent;
+  }
+  #ctxMenu.ctx-rola::-webkit-scrollbar{width:9px}
+  #ctxMenu.ctx-rola::-webkit-scrollbar-track{background:transparent}
+  #ctxMenu.ctx-rola::-webkit-scrollbar-thumb{
+    background:var(--line2);border-radius:5px;border:2px solid #fff;
+  }
+  #ctxMenu.ctx-rola::-webkit-scrollbar-thumb:hover{background:var(--txt3)}
+
+  /* avisa que há itens acima ou abaixo do que se vê */
+  #ctxMenu.rola-cima{box-shadow:0 12px 34px rgba(35,48,41,.22), inset 0 9px 8px -8px rgba(35,48,41,.30)}
+  #ctxMenu.rola-baixo{box-shadow:0 12px 34px rgba(35,48,41,.22), inset 0 -9px 8px -8px rgba(35,48,41,.30)}
+  #ctxMenu.rola-cima.rola-baixo{
+    box-shadow:0 12px 34px rgba(35,48,41,.22),
+               inset 0 9px 8px -8px rgba(35,48,41,.30),
+               inset 0 -9px 8px -8px rgba(35,48,41,.30);
+  }
+
+  /* telas baixas: aperta sem perder legibilidade */
+  #ctxMenu.ctx-compacto .ctx-i{padding:4px 8px;font-size:11.8px}
+  #ctxMenu.ctx-compacto .ctx-tit{padding:4px 9px 2px;font-size:9px}
+  #ctxMenu.ctx-compacto .ctx-sep{margin:2px 6px}
+  #ctxMenu.ctx-compacto .ctx-linha{padding:1px 6px 3px}
+
+  /* submenu de conversão */
+  .ctx-voltar{color:var(--txt2);font-weight:700}
+  .ctx-voltar .ctx-ico{font-size:15px;font-weight:800}
+  .ctx-voltar:hover:not(:disabled){background:var(--musgo-1);color:var(--acao)}
+  .ctx-atual{
+    padding:0 9px 6px;font-size:10.5px;color:var(--txt3);line-height:1.4;
+  }
+  .ctx-atual b{color:var(--txt2)}
+  .ctx-vazio{padding:10px 9px;font-size:11.5px;color:var(--txt3);line-height:1.5}
+  .ctx-i .ctx-seta{margin-left:2px}
+
+  /* navegação por teclado */
+  .ctx-i.ctx-foco{background:var(--musgo-1);color:var(--acao);outline:1.5px solid var(--acao);outline-offset:-1.5px}`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+</script>
+
 </body></html>
