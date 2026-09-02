@@ -18080,4 +18080,639 @@ let ligarGestosCamera=null;
 })();
 
 </script>
+
+<script>
+/* =========================================================================
+   C-Floxer v31 — Correções de importação e das abas de página
+   1) O leitor passa a reconhecer e anunciar desenhos sem fluxo BPMN
+   2) Ajuda [!] no Leitor, explicando o padrão ideal de .vbpm/.json
+   3) As abas/páginas aparecem logo após o import, sem precisar do ☰
+   4) Setas para percorrer as abas quando há muitas
+   5) A listagem de abas não volta ao início ao trocar de página
+   Nada anterior é removido: tudo aqui corrige ou acrescenta.
+   ========================================================================= */
+
+/* =========================================================================
+   1) O QUE HÁ NO DESENHO — leitura honesta do que foi importado
+   O leitor antigo só contava elementos de fluxo. Um arquivo cheio de
+   desenhos, telas, tabelas e imagens aparecia como se estivesse vazio.
+   ========================================================================= */
+
+/* elemento que participa da execução do processo */
+function ehElementoDeFluxo(n){
+  return n && T[n.type] && (T[n.type].fam||'bpmn')==='bpmn'
+    && ['event','activity','gateway'].includes(T[n.type].cat);
+}
+/* tudo o mais: artefatos, formas livres, telas, ícones, tabelas e imagens */
+function ehElementoDeDesenho(n){
+  return n && T[n.type] && !ehElementoDeFluxo(n);
+}
+
+/* inventário completo, somando todas as páginas do arquivo */
+function inventarioDoModelo(){
+  const todas=[];
+  if(model.paginas && model.paginas.length){
+    model.paginas.forEach((p,i)=>todas.push({i, nome:p.nome, nodes:p.nodes||[], edges:p.edges||[], pools:p.pools||[]}));
+  } else {
+    todas.push({i:0, nome:'Principal', nodes:model.nodes, edges:model.edges, pools:model.pools});
+  }
+  const inv={
+    paginas: todas.length,
+    fluxo:0, atividades:0, decisoes:0, eventos:0,
+    desenho:0, imagens:0, tabelas:0, telas:0, anotacoes:0, agrupamentos:0,
+    conexoes:0, raias:0, comentarios:(model.todosComentarios||model.comentarios||[]).length,
+    familias:{}, porPagina:[]
+  };
+  todas.forEach(pg=>{
+    let f=0, d=0;
+    (pg.nodes||[]).forEach(n=>{
+      if(!T[n.type]) return;
+      const fam=T[n.type].fam||'bpmn';
+      const cat=T[n.type].cat;
+      if(ehElementoDeFluxo(n)){
+        f++; inv.fluxo++;
+        if(cat==='activity') inv.atividades++;
+        else if(cat==='gateway') inv.decisoes++;
+        else inv.eventos++;
+      } else {
+        d++; inv.desenho++;
+        if(n.type==='image') inv.imagens++;
+        else if(n.type==='table') inv.tabelas++;
+        else if(n.type==='textAnnotation') inv.anotacoes++;
+        else if(n.type==='group') inv.agrupamentos++;
+        else if(fam==='dev') inv.telas++;
+        /* o rótulo precisa dizer o que a pessoa vê, não a família interna:
+           uma imagem é "Imagens", não "Fluxograma BPMN 2.0" */
+        let rot;
+        if(n.type==='image') rot='Imagens';
+        else if(n.type==='table') rot='Tabelas';
+        else if(cat==='artifact') rot='Artefatos e anotações';
+        else rot=(FAMILIAS.find(x=>x.id===fam)||{}).label || 'Outros';
+        inv.familias[rot]=(inv.familias[rot]||0)+1;
+      }
+    });
+    inv.conexoes += (pg.edges||[]).length;
+    (pg.pools||[]).forEach(p=>{ inv.raias += (p.lanes||[]).length; });
+    inv.porPagina.push({nome:pg.nome, fluxo:f, desenho:d, conexoes:(pg.edges||[]).length});
+  });
+  inv.soDesenho = inv.fluxo===0 && inv.desenho>0;
+  inv.misto     = inv.fluxo>0 && inv.desenho>0;
+  inv.vazio     = inv.fluxo===0 && inv.desenho===0;
+  return inv;
+}
+
+/* o estado vivo precisa apontar para a página corrente do arquivo lido */
+function sincronizarPaginaAposImport(){
+  if(!model.paginas || !model.paginas.length){
+    /* arquivo sem páginas: cria a principal a partir do estado vivo */
+    if(typeof garantirPaginas==='function') garantirPaginas();
+    return;
+  }
+  let i = model.paginaAtual;
+  if(i==null || i<0 || i>=model.paginas.length) i=0;
+  model.paginaAtual=i;
+  const p=model.paginas[i];
+  /* Se o arquivo trouxe conteúdo no topo e a página corrente está vazia,
+     a página é a que deve receber esse conteúdo — não o contrário. */
+  const pgVazia = !(p.nodes||[]).length && !(p.pools||[]).length;
+  const vivoTem = (model.nodes||[]).length || (model.pools||[]).length;
+  if(pgVazia && vivoTem){
+    p.nodes=model.nodes; p.edges=model.edges; p.pools=model.pools;
+    p.comentarios=model.comentarios||[];
+  } else {
+    model.nodes=p.nodes||[]; model.edges=p.edges||[]; model.pools=p.pools||[];
+    model.comentarios=p.comentarios||[];
+  }
+  if(p.view) view={k:p.view.k, tx:p.view.tx, ty:p.view.ty};
+  model.sugestoes=[];
+}
+
+/* =========================================================================
+   2) O LEITOR PASSA A CONTAR O QUE DE FATO VEIO
+   ========================================================================= */
+function posImport(nome,formato){
+  sincronizarPaginaAposImport();
+  atualizarNomeTopo();
+  history=[]; hpos=-1; pushHistory();
+  setSel(null);
+  /* as abas precisam existir antes do primeiro render, senão o arquivo
+     parece ter uma página só até alguém abrir o menu ☰ */
+  if(typeof renderAbas==='function') renderAbas();
+  render(); renderProps(); renderTabela(); renderPreview(); fit(); atualizarSelInfo();
+
+  const inv=inventarioDoModelo();
+  const v=validar(model);
+  const erros=v.filter(x=>x.k==='err').length;
+
+  /* KPIs conforme a natureza do arquivo: fluxo, desenho ou os dois */
+  const kpi = inv.soDesenho
+    ? `<div><b>${inv.desenho}</b><span>Elementos de desenho</span></div>
+       <div><b>${inv.paginas}</b><span>Páginas</span></div>
+       <div><b>${inv.conexoes}</b><span>Conexões</span></div>
+       <div><b>${inv.telas}</b><span>Telas</span></div>
+       <div><b>${inv.imagens}</b><span>Imagens</span></div>
+       <div><b>${inv.tabelas}</b><span>Tabelas</span></div>`
+    : `<div><b>${inv.fluxo}</b><span>Elementos de fluxo</span></div>
+       <div><b>${inv.atividades}</b><span>Atividades</span></div>
+       <div><b>${inv.decisoes}</b><span>Decisões</span></div>
+       <div><b>${inv.conexoes}</b><span>Conexões</span></div>
+       <div><b>${inv.raias}</b><span>Raias</span></div>
+       <div><b>${inv.paginas}</b><span>Páginas</span></div>
+       ${inv.desenho?`<div><b>${inv.desenho}</b><span>Elementos de desenho</span></div>`:''}
+       <div><b>${erros}</b><span>Erros BPMN</span></div>`;
+
+  /* a lista das famílias importadas, para não restar dúvida do que entrou */
+  const fams=Object.keys(inv.familias);
+  const detalheDesenho = inv.desenho ? `
+    <div class="imp-fam">
+      <div class="imp-fam-t">O que veio de desenho</div>
+      <div class="imp-fam-l">
+        ${fams.map(k=>`<span class="imp-fam-i"><b>${inv.familias[k]}</b> ${esc(k)}</span>`).join('')}
+      </div>
+    </div>` : '';
+
+  /* páginas listadas, quando há mais de uma */
+  const detalhePaginas = inv.paginas>1 ? `
+    <div class="imp-fam">
+      <div class="imp-fam-t">Páginas do arquivo</div>
+      <div class="imp-pgs">
+        ${inv.porPagina.map((p,i)=>`
+          <button class="imp-pg ${i===model.paginaAtual?'on':''}" data-imppg="${i}">
+            <b>${esc(p.nome)}</b>
+            <span>${p.fluxo?p.fluxo+' de fluxo':''}${p.fluxo&&p.desenho?' · ':''}${p.desenho?p.desenho+' de desenho':''}${!p.fluxo&&!p.desenho?'vazia':''}</span>
+          </button>`).join('')}
+      </div>
+    </div>` : '';
+
+  /* o aviso que faltava: arquivo sem fluxo, mas com desenho */
+  const aviso = inv.soDesenho ? `
+    <div class="imp-aviso desenho">
+      <span class="imp-aviso-i">◇</span>
+      <div>
+        <b>Este arquivo não tem um fluxo BPMN — e foi importado assim mesmo.</b>
+        <span>Vieram <b>${inv.desenho} elemento(s) de desenho</b>${inv.paginas>1?` em <b>${inv.paginas} páginas</b>`:''}:
+          ${fams.map(k=>esc(k)).join(', ')}. Está tudo na <b>Modelagem livre</b>, pronto para editar.
+          A validação BPMN e a documentação de processo não se aplicam a este conteúdo.</span>
+      </div>
+    </div>` : (inv.misto && inv.desenho>=inv.fluxo ? `
+    <div class="imp-aviso misto">
+      <span class="imp-aviso-i">◈</span>
+      <div>
+        <b>Arquivo misto: fluxo e desenho.</b>
+        <span>Além das ${inv.fluxo} etapas do processo, vieram <b>${inv.desenho} elemento(s) de desenho</b>
+          (${fams.map(k=>esc(k)).join(', ')}). Os apontamentos abaixo valem só para a parte de fluxo.</span>
+      </div>
+    </div>` : (inv.vazio ? `
+    <div class="imp-aviso vazio">
+      <span class="imp-aviso-i">⚠</span>
+      <div>
+        <b>O arquivo foi lido, mas não trouxe nenhum elemento.</b>
+        <span>Confira se o formato está correto — o botão <b>[!]</b> ao lado do título explica
+          o padrão esperado para .vbpm e .json.</span>
+      </div>
+    </div>` : ''));
+
+  $('#readOut').innerHTML=`
+    <div class="card" style="max-width:1180px">
+      <h4><span class="ext">OK</span> ${esc(nome)} — lido como ${esc(formato)}</h4>
+      ${aviso}
+      <div class="doc kpi" style="border:0;box-shadow:none;padding:0">${kpi}</div>
+      ${detalheDesenho}
+      ${detalhePaginas}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary sm" onclick="irPara('modelar')">◈ Abrir na modelagem</button>
+        ${inv.soDesenho?'':`<button class="btn sm" onclick="irPara('processo');gerarDoc()">▦ Gerar documentação</button>`}
+        <button class="btn sm" onclick="irPara('exportar')">⤓ Exportar em outro formato</button>
+        <button class="btn sm" id="impAjudaPadrao">? Padrão de importação</button>
+      </div>
+      ${inv.soDesenho?'':`
+        <div class="divider"></div>
+        <div class="vlist">${v.map(x=>`<div class="vitem ${x.k}"><div class="dot"></div><div><b>${esc(x.t)}</b><span>${esc(x.d)}</span></div></div>`).join('')}</div>`}
+    </div>`;
+
+  /* clicar numa página do relatório abre aquela página no desenho */
+  $$('#readOut [data-imppg]').forEach(b=>b.onclick=()=>{
+    const i=+b.dataset.imppg;
+    if(typeof carregarPagina==='function' && carregarPagina(i)){
+      renderAbas(); render(); renderProps(); atualizarSelInfo(); fit();
+      irPara('modelar');
+    }
+  });
+  const ba=$('#impAjudaPadrao');
+  if(ba) ba.onclick=modalPadraoImportacao;
+
+  /* a mensagem final diz exatamente o que entrou */
+  if(inv.soDesenho){
+    toast(`Importado: ${inv.desenho} elemento(s) de desenho`
+      + (inv.paginas>1?` em ${inv.paginas} páginas`:'')
+      + ' — sem fluxo BPMN neste arquivo','ok');
+  } else if(inv.vazio){
+    toast('O arquivo foi lido, mas não trouxe elementos — confira o padrão em [!]','err');
+  } else {
+    toast(`Importado: ${inv.fluxo} etapa(s)`
+      + (inv.desenho?` e ${inv.desenho} elemento(s) de desenho`:'')
+      + (inv.paginas>1?` · ${inv.paginas} páginas`:''),'ok');
+  }
+}
+
+/* =========================================================================
+   3) AJUDA [!] — o padrão ideal de arquivo para leitura
+   ========================================================================= */
+function exemploVBPM(){
+  return {
+    app:'C-Floxer', formato:'vbpm', versaoFormato:4,
+    gerado:new Date().toISOString(),
+    nome:'Exemplo mínimo',
+    modelo:{
+      meta:{nome:'Exemplo mínimo', area:'', dono:'', versao:'1.0', tipo:'AS-IS',
+            objetivo:'', gatilho:'', entradas:'', saidas:'', cliente:'',
+            fornecedor:'', sistemas:'', autor:'', data:''},
+      nodes:[
+        {id:'n1', type:'startEvent', name:'Início',   x:120, y:160, w:38,  h:38},
+        {id:'n2', type:'userTask',   name:'Conferir documento', x:230, y:140, w:150, h:82,
+         doc:'O que é feito, como e com qual critério', resp:'Analista',
+         sistema:'ServiceNow', tempo:'15 min', volume:'320', risco:'', N:'N1', G:'', Q:''},
+        {id:'n3', type:'exclusiveGateway', name:'Está correto?', x:440, y:152, w:52, h:52},
+        {id:'n4', type:'endEvent',   name:'Fim',      x:570, y:160, w:38,  h:38},
+        {id:'d1', type:'shpRetArred', name:'Bloco de desenho (não é fluxo)', x:230, y:300, w:160, h:80},
+        {id:'t1', type:'textAnnotation', name:'Observação livre', x:440, y:300, w:170, h:52}
+      ],
+      edges:[
+        {id:'f1', type:'sequenceFlow',    source:'n1', target:'n2', name:'',
+         srcPort:'', tgtPort:'', waypoints:[], style:'orto'},
+        {id:'f2', type:'sequenceFlow',    source:'n2', target:'n3', name:''},
+        {id:'f3', type:'conditionalFlow', source:'n3', target:'n4', name:'Sim'},
+        {id:'a1', type:'association',     source:'t1', target:'n2', name:''}
+      ],
+      pools:[
+        {id:'p1', type:'pool', name:'Processo', orient:'h', x:60, y:60, w:900, h:200,
+         lanes:[{id:'l1', name:'Analista', h:200, w:260}]}
+      ],
+      comentarios:[],
+      paginas:[],
+      paginaAtual:0
+    }
+  };
+}
+
+function modalPadraoImportacao(){
+  abrirModal('Padrão de arquivo para importação',
+    `<p style="margin-top:0;color:var(--txt2);font-size:12.5px">
+       O <b>.vbpm</b> é um JSON. O <b>.json</b> é lido pela mesma regra. Só três coisas
+       são realmente obrigatórias: <b>nodes</b>, <b>edges</b> e, se houver raias, <b>pools</b>.
+       Todo o resto tem valor padrão.</p>
+
+     <h3 style="margin:14px 0 6px">Estrutura mínima</h3>
+     <pre class="imp-cod">{
+  "app": "C-Floxer",
+  "formato": "vbpm",
+  "versaoFormato": 4,
+  "modelo": {
+    "meta":  { "nome": "Nome do processo", "tipo": "AS-IS", "versao": "1.0" },
+    "nodes": [ ... ],
+    "edges": [ ... ],
+    "pools": [ ... ],
+    "paginas": [ ... ],
+    "comentarios": [ ... ]
+  }
+}</pre>
+     <div class="dica-inline">
+       O invólucro é opcional: um arquivo que traga apenas
+       <code>{ "nodes": [...], "edges": [...] }</code> também é aceito.
+     </div>
+
+     <h3 style="margin:16px 0 6px">Cada elemento (nodes)</h3>
+     <table class="doc" style="border:0;padding:0;box-shadow:none">
+       <thead><tr><th>Campo</th><th>Obrigatório</th><th>O que é</th></tr></thead>
+       <tbody>
+         <tr><td><b>id</b></td><td>sim</td><td>Identificador único no arquivo. É por ele que as setas se ligam.</td></tr>
+         <tr><td><b>type</b></td><td>sim</td><td>Tipo interno: <code>startEvent</code>, <code>userTask</code>, <code>exclusiveGateway</code>, <code>endEvent</code>, <code>shpRetArred</code>, <code>image</code>… Tipo não reconhecido vira <code>task</code>.</td></tr>
+         <tr><td><b>name</b></td><td>não</td><td>Rótulo exibido.</td></tr>
+         <tr><td><b>x, y, w, h</b></td><td>não</td><td>Posição e tamanho. Sem eles, o C-Floxer aplica auto-layout.</td></tr>
+         <tr><td>doc, resp, sistema, tempo, volume, risco</td><td>não</td><td>Campos de negócio que alimentam a documentação.</td></tr>
+         <tr><td>N, G, Q</td><td>não</td><td>Régua de maturidade: <code>N0</code>–<code>N3</code>, <code>G0</code>–<code>G3</code>, <code>Q0</code>–<code>Q3</code>.</td></tr>
+         <tr><td>laneId</td><td>não</td><td>Id da raia onde o elemento fica.</td></tr>
+         <tr><td>cor, fundo, traco, espessura, z</td><td>não</td><td>Aparência e camada.</td></tr>
+         <tr><td>src, natW, natH</td><td>só imagens</td><td><code>src</code> é a imagem embutida como <code>data:image/...;base64,</code>.</td></tr>
+         <tr><td>celulas</td><td>só tabelas</td><td>Matriz de linhas × colunas, em texto.</td></tr>
+       </tbody>
+     </table>
+
+     <h3 style="margin:16px 0 6px">Cada conexão (edges)</h3>
+     <table class="doc" style="border:0;padding:0;box-shadow:none">
+       <thead><tr><th>Campo</th><th>Obrigatório</th><th>O que é</th></tr></thead>
+       <tbody>
+         <tr><td><b>id</b></td><td>sim</td><td>Identificador único.</td></tr>
+         <tr><td><b>source, target</b></td><td>sim</td><td>Os <b>id</b> dos elementos ligados. Se um não existir, a conexão é descartada.</td></tr>
+         <tr><td><b>type</b></td><td>não</td><td><code>sequenceFlow</code> (padrão), <code>conditionalFlow</code>, <code>defaultFlow</code>, <code>messageFlow</code>, <code>association</code>.</td></tr>
+         <tr><td>name</td><td>não</td><td>Rótulo da seta. Em decisões, é a condição.</td></tr>
+         <tr><td>srcPort, tgtPort</td><td>não</td><td>Lateral de saída e chegada: <code>n</code>, <code>s</code>, <code>e</code>, <code>w</code>. Vazio deixa o C-Floxer escolher.</td></tr>
+         <tr><td>waypoints</td><td>não</td><td>Lista de <code>{x,y}</code> com as dobras manuais.</td></tr>
+       </tbody>
+     </table>
+
+     <h3 style="margin:16px 0 6px">Páginas (paginas)</h3>
+     <p style="font-size:12.3px;color:var(--txt2);margin:0 0 8px">
+       Cada página é um desenho independente dentro do mesmo arquivo. Quando existirem,
+       elas mandam: o conteúdo do topo passa a ser apenas espelho da página aberta.</p>
+     <pre class="imp-cod">"paginas": [
+  { "id": "pg1", "nome": "Fluxo principal",
+    "nodes": [...], "edges": [...], "pools": [...],
+    "comentarios": [], "view": { "k": 1, "tx": 60, "ty": 60 } }
+],
+"paginaAtual": 0</pre>
+
+     <h3 style="margin:16px 0 6px">Arquivos só de desenho</h3>
+     <div class="dica-inline" style="border-left-color:var(--sel);background:#FDF8EF">
+       Um arquivo pode não ter nenhum elemento BPMN e trazer só formas livres, telas,
+       organograma, mapa mental, imagens e tabelas. <b>Isso é válido e é importado normalmente.</b>
+       O leitor passa a dizer, com todas as letras, quantos elementos de desenho vieram —
+       o que antes ficava invisível porque a contagem só olhava para o fluxo.
+     </div>
+
+     <h3 style="margin:16px 0 6px">O que costuma dar errado</h3>
+     <ul style="font-size:12.3px;line-height:1.65;color:var(--txt2);margin:0 0 6px 18px">
+       <li><b>id repetido</b> entre elementos — a última ocorrência sobrescreve a anterior.</li>
+       <li><b>source</b> ou <b>target</b> apontando para um id que não existe — a seta some.</li>
+       <li>Imagem referenciada por caminho de arquivo em vez de <b>data URL</b> — não há como resolver o caminho no navegador.</li>
+       <li>Conteúdo no topo <b>e</b> em <code>paginas</code> ao mesmo tempo, divergindo entre si.</li>
+       <li>Números como texto (<code>"x": "120"</code>) — funciona, mas convém enviar número.</li>
+     </ul>`,
+    `<button class="btn" id="impBaixarEx">⤓ Baixar exemplo .vbpm</button>
+     <button class="btn primary" onclick="fecharModal()">Entendi</button>`);
+  const b=$('#impBaixarEx');
+  if(b) b.onclick=()=>{
+    baixar('C-Floxer_exemplo_padrao.vbpm', JSON.stringify(exemploVBPM(),null,2),
+      'application/json;charset=utf-8');
+    toast('Exemplo baixado — abra num editor de texto para ver a estrutura','ok');
+  };
+}
+
+/* o botão [!] entra ao lado do título do Leitor */
+function montarAjudaLeitor(){
+  const sec=$('#view-leitor');
+  if(!sec) return;
+  const h2=sec.querySelector('h2');
+  if(!h2 || h2.dataset.v31) return;
+  h2.dataset.v31='1';
+  h2.style.display='flex';
+  h2.style.alignItems='center';
+  h2.style.gap='10px';
+  const b=document.createElement('button');
+  b.className='imp-help';
+  b.id='btnAjudaImport';
+  b.textContent='!';
+  b.title='Dúvidas de .vbpm — qual é o padrão ideal para o arquivo ser lido corretamente';
+  b.onclick=modalPadraoImportacao;
+  h2.appendChild(b);
+  const dica=document.createElement('span');
+  dica.className='imp-help-l';
+  dica.textContent='dúvidas sobre o formato';
+  h2.appendChild(dica);
+  dica.onclick=modalPadraoImportacao;
+}
+
+/* =========================================================================
+   4) ABAS DE PÁGINA — setas, rolagem preservada e aba ativa sempre visível
+   ========================================================================= */
+let _abasScroll = 0;
+
+function abasLista(){ return $('#abasLista'); }
+
+/* deixa a aba corrente dentro da faixa visível, sem sacudir a tela */
+function garantirAbaVisivel(){
+  const l=abasLista(); if(!l) return;
+  const a=l.querySelector('.aba.on'); if(!a) return;
+  const ini=a.offsetLeft, fim=ini+a.offsetWidth;
+  if(ini < l.scrollLeft+6) l.scrollLeft=Math.max(0, ini-10);
+  else if(fim > l.scrollLeft+l.clientWidth-6) l.scrollLeft=fim-l.clientWidth+10;
+}
+
+/* mostra ou esconde as setas conforme houver o que rolar */
+function atualizarSetasAbas(){
+  const l=abasLista(); const barra=$('#abasBar');
+  if(!l || !barra) return;
+  const transborda = l.scrollWidth > l.clientWidth+2;
+  barra.classList.toggle('com-setas', transborda);
+  const e=$('#abaEsq'), d=$('#abaDir');
+  if(e) e.disabled = !transborda || l.scrollLeft<=1;
+  if(d) d.disabled = !transborda || l.scrollLeft >= l.scrollWidth-l.clientWidth-1;
+  const c=$('#abaCont');
+  if(c){
+    const pgs=(model.paginas||[]).length;
+    c.textContent = transborda ? `${(model.paginaAtual||0)+1}/${pgs}` : '';
+    c.style.display = transborda ? 'flex' : 'none';
+  }
+}
+
+function rolarAbas(dir){
+  const l=abasLista(); if(!l) return;
+  l.scrollBy({left: dir*Math.max(160, l.clientWidth*0.6), behavior:'smooth'});
+  setTimeout(atualizarSetasAbas, 320);
+}
+
+function renderAbas(){
+  const barra=$('#abasBar'); if(!barra) return;
+  garantirPaginas();
+  const pgs=model.paginas;
+
+  /* guarda onde a listagem estava: reconstruir o HTML zerava a rolagem */
+  const anterior=abasLista();
+  if(anterior) _abasScroll=anterior.scrollLeft;
+
+  let h=`<button class="aba-seta" id="abaEsq" title="Páginas anteriores">‹</button>
+         <div class="abas-lista" id="abasLista">`;
+  pgs.forEach((p,i)=>{
+    const vazia = !(p.nodes||[]).length && !(p.pools||[]).length;
+    const qtd = (p.nodes||[]).length;
+    h+=`<div class="aba ${i===model.paginaAtual?'on':''} ${vazia?'vazia':''}" data-pg="${i}"
+             draggable="true" title="${esc(p.nome)}${vazia?' — página vazia':` — ${qtd} elemento(s)`}">
+        <span class="aba-nome" data-pgnome="${i}">${esc(p.nome)}</span>
+        ${pgs.length>1?`<button class="aba-x" data-pgdel="${i}" title="Excluir página">✕</button>`:''}
+      </div>`;
+  });
+  h+=`</div>
+    <button class="aba-seta" id="abaDir" title="Próximas páginas">›</button>
+    <span class="aba-cont" id="abaCont"></span>
+    <button class="aba-add" id="abaAdd" title="Nova página (Ctrl+Shift+N)">＋</button>
+    <button class="aba-menu" id="abaMenu" title="Todas as páginas">☰</button>`;
+  barra.innerHTML=h;
+
+  const lista=abasLista();
+
+  barra.querySelectorAll('[data-pg]').forEach(el=>{
+    el.onclick=ev=>{
+      if(ev.target.dataset.pgdel!==undefined) return;
+      const i=+el.dataset.pg;
+      if(i===model.paginaAtual) return;
+      /* preserva a rolagem da própria aba clicada, para a listagem não voltar */
+      _abasScroll = lista ? lista.scrollLeft : _abasScroll;
+      carregarPagina(i); renderAbas(); render(); renderProps(); atualizarSelInfo(); fit();
+    };
+    el.ondblclick=ev=>{ ev.stopPropagation(); renomearPagina(+el.dataset.pg); };
+    /* reordenar arrastando */
+    el.addEventListener('dragstart', ev=>{
+      ev.dataTransfer.setData('text/cfloxer-pg', el.dataset.pg);
+      ev.dataTransfer.effectAllowed='move';
+      el.classList.add('arrastando');
+    });
+    el.addEventListener('dragend', ()=>el.classList.remove('arrastando'));
+    el.addEventListener('dragover', ev=>{
+      if([...(ev.dataTransfer.types||[])].includes('text/cfloxer-pg')){
+        ev.preventDefault(); el.classList.add('alvo');
+      }
+    });
+    el.addEventListener('dragleave', ()=>el.classList.remove('alvo'));
+    el.addEventListener('drop', ev=>{
+      el.classList.remove('alvo');
+      const de=ev.dataTransfer.getData('text/cfloxer-pg');
+      if(de==='') return;
+      ev.preventDefault(); ev.stopPropagation();
+      const origem=+de, destino=+el.dataset.pg;
+      if(origem!==destino && typeof moverPagina==='function'){ moverPagina(origem, destino); }
+    });
+  });
+
+  barra.querySelectorAll('[data-pgdel]').forEach(b=>b.onclick=ev=>{
+    ev.stopPropagation(); excluirPagina(+b.dataset.pgdel);
+  });
+  const ba=$('#abaAdd'); if(ba) ba.onclick=()=>novaPagina();
+  const bm=$('#abaMenu'); if(bm) bm.onclick=modalPaginas;
+  const be=$('#abaEsq'); if(be) be.onclick=()=>rolarAbas(-1);
+  const bd=$('#abaDir'); if(bd) bd.onclick=()=>rolarAbas(1);
+
+  if(lista){
+    /* devolve a rolagem antes de qualquer ajuste, e só então garante
+       que a aba ativa esteja à vista — nessa ordem a listagem não "volta" */
+    lista.scrollLeft=_abasScroll;
+    lista.onscroll=()=>{ _abasScroll=lista.scrollLeft; atualizarSetasAbas(); };
+    /* a roda do mouse rola as abas na horizontal */
+    lista.onwheel=ev=>{
+      if(lista.scrollWidth<=lista.clientWidth) return;
+      ev.preventDefault();
+      lista.scrollLeft += (ev.deltaY||ev.deltaX);
+      atualizarSetasAbas();
+    };
+    /* o layout só está medido depois de pintar */
+    requestAnimationFrame(()=>{
+      garantirAbaVisivel();
+      atualizarSetasAbas();
+    });
+  }
+}
+
+/* ao redimensionar a janela, as setas podem passar a fazer falta */
+window.addEventListener('resize', ()=>{ try{ atualizarSetasAbas(); }catch(e){} });
+
+/* =========================================================================
+   5) ESTILOS
+   ========================================================================= */
+(function(){
+  const css=`
+  /* ---- abas com setas ---- */
+  #abasBar{gap:2px;padding:3px 5px}
+  .aba-seta{
+    display:none;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer;
+    width:22px;flex:0 0 22px;color:var(--txt2);font-weight:800;font-size:14px;line-height:1;padding:0;
+  }
+  #abasBar.com-setas .aba-seta{display:block}
+  .aba-seta:hover:not(:disabled){border-color:var(--acao);color:var(--acao);background:var(--musgo-0)}
+  .aba-seta:disabled{opacity:.28;cursor:default}
+  .aba-cont{
+    display:none;align-items:center;padding:0 7px;font-size:10px;font-weight:800;
+    color:var(--txt3);white-space:nowrap;letter-spacing:.3px;
+  }
+  .abas-lista{scroll-behavior:auto}
+  .aba{transition:background .12s,border-color .12s;position:relative}
+  .aba.vazia .aba-nome{opacity:.62;font-style:italic}
+  .aba.arrastando{opacity:.45}
+  .aba.alvo{box-shadow:inset 3px 0 0 var(--sel)}
+
+  /* ---- ajuda do leitor ---- */
+  .imp-help{
+    width:24px;height:24px;flex:0 0 24px;border-radius:50%;cursor:pointer;
+    border:1.6px solid var(--sel);background:#fff;color:var(--sel);
+    font-weight:800;font-size:13px;line-height:1;padding:0;
+  }
+  .imp-help:hover{background:var(--sel);color:#fff}
+  .imp-help-l{
+    font-size:11px;font-weight:600;color:var(--txt3);cursor:pointer;
+    letter-spacing:.2px;margin-left:-4px;
+  }
+  .imp-help-l:hover{color:var(--sel);text-decoration:underline}
+  .imp-cod{
+    background:var(--musgo-0);border:1px solid var(--line);border-radius:9px;
+    padding:11px 13px;font-family:Consolas,'SF Mono',monospace;font-size:11.3px;
+    line-height:1.6;color:var(--musgo-8);overflow-x:auto;margin:0 0 10px;white-space:pre;
+  }
+  .modal code{
+    background:var(--musgo-1);border-radius:4px;padding:1px 5px;
+    font-family:Consolas,monospace;font-size:11px;color:var(--musgo-8);
+  }
+
+  /* ---- relatório de importação ---- */
+  .imp-aviso{
+    display:flex;gap:12px;align-items:flex-start;border-radius:10px;
+    padding:12px 14px;margin:4px 0 12px;border:1px solid var(--line);
+  }
+  .imp-aviso.desenho{background:#F1EFFA;border-color:#DEDCF7}
+  .imp-aviso.misto{background:var(--musgo-0);border-color:var(--line2)}
+  .imp-aviso.vazio{background:#FDF8EF;border-color:#F0DDA8}
+  .imp-aviso-i{
+    width:28px;height:28px;flex:0 0 28px;border-radius:8px;display:flex;
+    align-items:center;justify-content:center;font-size:15px;font-weight:800;
+    background:rgba(255,255,255,.7);color:var(--acao);
+  }
+  .imp-aviso.desenho .imp-aviso-i{color:#5B4B9E}
+  .imp-aviso.vazio .imp-aviso-i{color:var(--warn)}
+  .imp-aviso b{display:block;font-size:12.8px;margin-bottom:3px;color:var(--txt)}
+  .imp-aviso span{font-size:12px;color:var(--txt2);line-height:1.55}
+  .imp-fam{margin:10px 0 4px}
+  .imp-fam-t{
+    font-size:9.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;
+    color:var(--txt3);margin-bottom:6px;
+  }
+  .imp-fam-l{display:flex;gap:6px;flex-wrap:wrap}
+  .imp-fam-i{
+    background:var(--musgo-0);border:1px solid var(--line);border-radius:20px;
+    padding:4px 11px;font-size:11.3px;color:var(--txt2);
+  }
+  .imp-fam-i b{color:var(--acao);font-weight:800}
+  .imp-pgs{display:flex;gap:6px;flex-wrap:wrap}
+  .imp-pg{
+    border:1px solid var(--line2);background:#fff;border-radius:9px;padding:7px 12px;
+    cursor:pointer;text-align:left;min-width:130px;
+  }
+  .imp-pg:hover{border-color:var(--acao);box-shadow:0 2px 8px rgba(35,48,41,.10)}
+  .imp-pg.on{border-color:var(--acao);box-shadow:0 0 0 2px rgba(61,81,66,.18)}
+  .imp-pg b{display:block;font-size:12px;color:var(--txt)}
+  .imp-pg span{font-size:10.3px;color:var(--txt3)}`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   6) ARRANQUE
+   ========================================================================= */
+(function(){
+  function arrancar(){
+    try{ montarAjudaLeitor(); }catch(e){}
+    try{ renderAbas(); }catch(e){}
+    /* o texto da zona de arraste passa a citar a ajuda */
+    try{
+      const dz=$('#dropzone');
+      if(dz && !dz.dataset.v31){
+        dz.dataset.v31='1';
+        const p=document.createElement('div');
+        p.style.cssText='margin-top:7px;font-size:11.3px;color:var(--txt3)';
+        p.innerHTML='Arquivos <b>só de desenho</b> — sem fluxo BPMN — também são aceitos e sinalizados no relatório.';
+        dz.appendChild(p);
+      }
+    }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,500));
+  else setTimeout(arrancar,500);
+})();
+
+</script>
+
 </body></html>
