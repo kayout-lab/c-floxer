@@ -8543,7 +8543,10 @@ async function exportPNG(){
   if(!temDiagrama()) return;
   const svg=buildStandaloneSVG(model,{header:true,pad:44});
   const {canvas}=await svgParaCanvas(svg,3);
-  canvas.toBlob(b=>{ baixar(nomeArq('png'),b); toast('PNG exportado','ok'); },'image/png');
+  /* devolve promessa: quem exporta em lote precisa esperar o arquivo ficar pronto */
+  return new Promise(res=>{
+    canvas.toBlob(b=>{ baixar(nomeArq('png'),b); toast('PNG exportado','ok'); res(true); },'image/png');
+  });
 }
 function exportSVG(){
   if(!temDiagrama()) return;
@@ -21706,6 +21709,740 @@ function initV35(){
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,460));
   else setTimeout(arrancar,460);
+})();
+
+</script>
+<script>
+/* =========================================================================
+   C-Floxer v36 — Exportação que funciona de verdade + layout para notebook
+   
+   Defeitos corrigidos:
+   1) Os botões da tela antiga chamavam as funções originais, ignorando o escopo
+   2) O modo "separadas" não gerava arquivo algum — a troca de nomeArq não
+      alcançava o escopo das funções de exportação
+   3) A tela não cabia em notebook: cabeçalho grande demais e colunas fixas
+   4) O leitor de arquivos tinha layout desalinhado
+   ========================================================================= */
+
+/* =========================================================================
+   1) NOMEAÇÃO POR PARÂMETRO, NÃO POR SUBSTITUIÇÃO
+   A troca temporária de nomeArq era frágil: em exportações assíncronas a
+   restauração acontecia antes do uso. Agora o sufixo é uma variável lida
+   pela própria nomeArq.
+   ========================================================================= */
+let _sufixoArq = '';
+/* A declaração de função é içada para o topo do bloco: capturar `nomeArq`
+   numa constante pegaria a NOVA função, criando recursão infinita.
+   Por isso a original é reconstruída aqui, e não referenciada. */
+function _nomeArqBase(ext){
+  const m=model.meta||{};
+  const limpa=t=>String(t||'').trim().replace(/[^\wÀ-ÿ\s-]/g,'').replace(/\s+/g,'_');
+  const partes=['CFLOXER', limpa(m.nome)||'Processo'];
+  if(m.tipo) partes.push(limpa(m.tipo));
+  if(m.versao) partes.push('v'+limpa(m.versao).replace(/\./g,'-'));
+  return partes.filter(Boolean).join('_')+'.'+ext;
+}
+
+function nomeArq(ext){
+  const base=_nomeArqBase(ext);
+  if(!_sufixoArq) return base;
+  const limpo=String(_sufixoArq)
+    .replace(/[·•–—]/g,' ')
+    .replace(/[^\wÀ-ÿ\s-]/g,'')
+    .trim().replace(/\s+/g,'_')
+    .replace(/_+/g,'_').replace(/^_|_$/g,'')
+    .slice(0,40) || 'pagina';
+  return base.replace(new RegExp('\\.'+ext+'$'), '_'+limpo+'.'+ext);
+}
+function comSufixo(sufixo, fn){
+  const antes=_sufixoArq;
+  _sufixoArq=sufixo||'';
+  try{ return fn(); }
+  finally{ _sufixoArq=antes; }
+}
+/* versão assíncrona: só devolve o sufixo depois que a promessa resolver */
+async function comSufixoAsync(sufixo, fn){
+  const antes=_sufixoArq;
+  _sufixoArq=sufixo||'';
+  try{ return await fn(); }
+  finally{ _sufixoArq=antes; }
+}
+
+/* =========================================================================
+   2) A EXPORTAÇÃO PASSA A RESPEITAR O ESCOPO, VENHA DE ONDE VIER
+   ========================================================================= */
+const _origExp = {
+  png:exportPNG, svg:exportSVG, pdf:exportPDF, html:exportHTML,
+  bpmn:exportBPMN, vdx:exportVDX, csv:exportCSV, pptx:exportPPTX, vbpm:exportVBPM
+};
+/* intervalo entre downloads: o navegador bloqueia disparos em sucessão rápida */
+const PAUSA_DOWNLOAD = 700;
+const espera = ms => new Promise(r=>setTimeout(r, ms));
+
+/* o ponto único por onde toda exportação passa */
+async function exportar(formato){
+  const fn=_origExp[formato];
+  if(!fn){ toast('Formato desconhecido: '+formato,'err'); return false; }
+
+  /* o projeto sempre guarda tudo, independentemente do escopo */
+  if(formato==='vbpm'){ _origExp.vbpm(); return true; }
+
+  garantirPaginas();
+  salvarPaginaAtual();
+  const paginas=paginasDoEscopo();
+
+  /* uma página só, ou escopo restrito: comportamento de sempre */
+  if(escopoExp.modo==='atual' || paginas.length<=1){
+    try{ const r=fn(); if(r && r.then) await r; return true; }
+    catch(e){ toast('Falha ao exportar: '+e.message,'err'); return false; }
+  }
+
+  /* ---- um arquivo por página ---- */
+  if(escopoExp.modo==='separadas'){
+    toast(`Gerando ${paginas.length} arquivos — aguarde`);
+    let ok=0;
+    for(const info of paginas){
+      const feito = await comSufixoAsync(info.nome, async ()=>{
+        return await comPaginaAsync(info.i, async ()=>{
+          try{ const r=fn(); if(r && r.then) await r; return true; }
+          catch(e){ console.error(e); return false; }
+        });
+      });
+      if(feito) ok++;
+      await espera(PAUSA_DOWNLOAD);   /* dá tempo ao navegador */
+    }
+    toast(ok===paginas.length
+      ? `${ok} arquivos gerados`
+      : `${ok} de ${paginas.length} arquivos gerados — verifique se o navegador bloqueou downloads múltiplos`,
+      ok===paginas.length?'ok':'err');
+    return ok>0;
+  }
+
+  /* ---- um arquivo com todas as páginas ---- */
+  const rotulo = escopoExp.modo==='selecao' ? 'selecao' : 'completo';
+  /* formatos com tratamento próprio, que preservam a estrutura de páginas */
+  if(formato==='bpmn') return exportBPMNProjeto();
+  if(formato==='csv')  return exportCSVProjeto();
+  if(formato==='html') return exportHTMLProjeto();
+
+  return await comSufixoAsync(rotulo, async ()=>{
+    return await comUnificadoAsync(paginas, async ()=>{
+      try{ const r=fn(); if(r && r.then) await r; return true; }
+      catch(e){ toast('Falha ao exportar: '+e.message,'err'); return false; }
+    });
+  });
+}
+
+/* versões assíncronas de comPagina e comUnificado — a original restaurava o
+   estado antes de a promessa resolver, o que corrompia exportações demoradas */
+async function comPaginaAsync(i, fn){
+  garantirPaginas();
+  const antes=model.paginaAtual;
+  salvarPaginaAtual();
+  const p=model.paginas[i];
+  if(!p) return null;
+  const guarda={nodes:model.nodes, edges:model.edges, pools:model.pools, comentarios:model.comentarios};
+  model.nodes=p.nodes||[]; model.edges=p.edges||[]; model.pools=p.pools||[];
+  model.comentarios=p.comentarios||[];
+  try{ return await fn(p, i); }
+  finally{
+    model.nodes=guarda.nodes; model.edges=guarda.edges;
+    model.pools=guarda.pools; model.comentarios=guarda.comentarios;
+    model.paginaAtual=antes;
+  }
+}
+async function comUnificadoAsync(paginas, fn, opts){
+  const u=modeloUnificado(paginas, opts);
+  const guarda={nodes:model.nodes, edges:model.edges, pools:model.pools, comentarios:model.comentarios};
+  model.nodes=u.nodes; model.edges=u.edges; model.pools=u.pools;
+  model.comentarios=[];
+  try{ return await fn(u); }
+  finally{
+    model.nodes=guarda.nodes; model.edges=guarda.edges;
+    model.pools=guarda.pools; model.comentarios=guarda.comentarios;
+  }
+}
+
+/* HTML do projeto: uma seção por página, no mesmo documento */
+function exportHTMLProjeto(){
+  const paginas=paginasDoEscopo();
+  if(paginas.length<=1) return _origExp.html();
+  const m=model.meta;
+  const marca=`<svg width="46" height="46" viewBox="0 0 64 64" style="flex:0 0 46px">${logoMarcaSVG('#fff','#CBDACF','#E0B978')}</svg>`;
+  const secoes=paginas.map((info,j)=>comPagina(info.i, ()=>{
+    const svg=buildStandaloneSVG(model,{pad:36});
+    const nAt=model.nodes.filter(n=>T[n.type]&&T[n.type].cat==='activity').length;
+    return `<section class="pg">
+      <h2>${j+1}. ${esc(info.nome)}</h2>
+      <p class="sub">${nAt} atividade(s) · ${model.edges.length} conexão(ões)</p>
+      <div class="box">${svg}</div>
+      ${nAt?`<div class="box">${tabelaAtividadesHTML()}</div>`:''}
+      ${nAt?`<div class="box">${narrativaHTML()}</div>`:''}
+    </section>`;
+  })).join('');
+  const k=kpisProjeto(paginas);
+  const html=`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+<title>C-Floxer · ${esc(m.nome)}</title>
+<style>body{font-family:'Inter','Segoe UI',sans-serif;margin:0;background:#F4F8F5;color:#233029}
+header{background:linear-gradient(100deg,#233029,#33453A 50%,#4A6152 115%);color:#fff;padding:16px 26px;
+  display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:5}
+header h1{margin:0;font-size:17px} header span{font-size:11.5px;opacity:.8}
+nav{background:#fff;border-bottom:1px solid #E3EBE6;padding:10px 26px;display:flex;gap:8px;
+  flex-wrap:wrap;position:sticky;top:70px;z-index:4}
+nav a{font-size:12px;color:#3D5142;text-decoration:none;border:1px solid #CBDACF;border-radius:20px;
+  padding:5px 13px;font-weight:600}
+nav a:hover{background:#EEF4F0}
+main{padding:22px 26px;max-width:1400px;margin:0 auto}
+.kpi{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.kpi div{background:#fff;border:1px solid #E3EBE6;border-radius:10px;padding:10px 16px}
+.kpi b{display:block;font-size:22px;color:#3D5142}
+.kpi span{font-size:10px;text-transform:uppercase;color:#4F6355;font-weight:700}
+.pg{margin-bottom:34px;scroll-margin-top:130px}
+.pg h2{font-size:17px;border-bottom:2px solid #3D5142;padding-bottom:6px;margin:0 0 4px}
+.pg .sub{font-size:11.5px;color:#4F6355;margin:0 0 12px}
+.box{background:#fff;border:1px solid #E3EBE6;border-radius:12px;padding:16px;margin-bottom:14px;overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th{background:#EEF4F0;text-align:left;padding:6px 8px;border:1px solid #CBDACF;font-size:10px;text-transform:uppercase}
+td{border:1px solid #E3EBE6;padding:6px 8px;vertical-align:top}
+svg{max-width:100%;height:auto}
+footer{padding:14px 26px;color:#94A89A;font-size:11px;display:flex;align-items:center;gap:9px}
+</style></head><body>
+<header>${marca}<div style="flex:1"><h1>${esc(m.nome)}</h1>
+<span>${[m.area,m.tipo,m.versao?'versão '+m.versao:'',m.data].filter(Boolean).map(esc).join(' · ')} · ${paginas.length} páginas</span></div>
+<div style="text-align:right"><b style="display:block;font-size:12px">C-Floxer</b>
+<i style="font-style:normal;font-size:9px;opacity:.7;letter-spacing:.6px">FLOW BUILDER</i></div></header>
+<nav>${paginas.map((p,j)=>`<a href="#pg${j}">${j+1}. ${esc(p.nome)}</a>`).join('')}</nav>
+<main><div class="kpi">${kpisProjetoHTML(k)}</div>
+${secoes.replace(/<section class="pg">/g, (()=>{ let i=0; return ()=>`<section class="pg" id="pg${i++}">`; })())}
+</main>
+<footer><svg width="22" height="22" viewBox="0 0 64 64">${logoMiniSVG('#4F6355','#8FA896','#C08A3E')}</svg>
+Gerado pelo C-Floxer — Flow Builder</footer></body></html>`;
+  return comSufixo('completo', ()=>{
+    baixar(nomeArq('html'), html, 'text/html;charset=utf-8');
+    toast(`HTML com ${paginas.length} páginas exportado`,'ok');
+    return true;
+  });
+}
+
+/* as funções de projeto também passam pelo sufixo correto */
+function exportBPMNProjeto(){
+  const paginas=paginasDoEscopo();
+  if(paginas.length<=1) return _origExp.bpmn();
+  const partes=paginas.map(info=>comPagina(info.i, ()=>{
+    const xml=toBPMN();
+    const m=xml.match(/<bpmn:definitions[^>]*>([\s\S]*)<\/bpmn:definitions>/);
+    return {nome:info.nome, corpo:m?m[1]:''};
+  }));
+  const cab=`<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  xmlns:vbpm="http://cfloxer.app/ns"
+  id="Definitions_projeto" targetNamespace="http://cfloxer.app/bpmn"
+  exporter="C-Floxer" exporterVersion="36">
+${partes.map(p=>`  <!-- ${esc(p.nome)} -->${p.corpo}`).join('\n')}
+</bpmn:definitions>`;
+  return comSufixo('completo', ()=>{
+    baixar(nomeArq('bpmn'), cab, 'application/xml;charset=utf-8');
+    toast(`BPMN com ${paginas.length} processos exportado`,'ok');
+    return true;
+  });
+}
+function exportCSVProjeto(){
+  const paginas=paginasDoEscopo();
+  if(paginas.length<=1) return _origExp.csv();
+  const linhas=[['Página','#','Atividade','Tipo','Raia','Sistema','Descrição',
+                 'Tempo','Volume','Automação','Risco']];
+  paginas.forEach(info=>comPagina(info.i, ()=>{
+    const ord=ordemFluxo();
+    (ord.length?ord:model.nodes)
+      .filter(n=>T[n.type]&&['activity','gateway','event'].includes(T[n.type].cat))
+      .forEach((n,j)=>{
+        linhas.push([info.nome, j+1, n.name||'', (T[n.type]||{}).label||n.type,
+          respDe(n)||'', n.sistema||'', n.doc||'', n.tempo||'', n.volume||'',
+          n.N||'', n.risco||'']);
+      });
+  }));
+  const csv='\uFEFF'+linhas.map(l=>l.map(c=>`"${String(c==null?'':c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+  return comSufixo('completo', ()=>{
+    baixar(nomeArq('csv'), csv, 'text/csv;charset=utf-8');
+    toast(`${linhas.length-1} atividade(s) de ${paginas.length} página(s) exportadas`,'ok');
+    return true;
+  });
+}
+async function exportPPTXProjeto(){
+  const paginas=paginasDoEscopo();
+  if(paginas.length<=1) return _origExp.pptx();
+  return await comSufixoAsync('completo', async ()=>
+    await comUnificadoAsync(paginas, async ()=>{
+      const r=_origExp.pptx(); if(r&&r.then) await r; return true;
+    }, {gap:400}));
+}
+/* mantém o nome antigo funcionando */
+function acionarExportacao(formato){ return exportar(formato); }
+function exportarComEscopo(formato){ return exportar(formato); }
+
+/* =========================================================================
+   3) TODOS OS BOTÕES PASSAM PELO MESMO CAMINHO
+   Era esta a causa da falha: os botões antigos chamavam as funções diretas.
+   ========================================================================= */
+function religarBotoesExport(){
+  /* qualquer botão com data-exp, esteja onde estiver */
+  $$('[data-exp]').forEach(b=>{
+    if(b.dataset.v36) return;
+    b.dataset.v36='1';
+    b.onclick=()=>exportar(b.dataset.exp);
+  });
+}
+
+/* =========================================================================
+   4) A TELA DE EXPORTAÇÃO, DIMENSIONADA PARA NOTEBOOK
+   ========================================================================= */
+function montarTelaExportacao(){
+  const view=$('#view-exportar');
+  if(!view) return;
+  if(view.dataset.v36){ ligarTelaExportacao(); return; }
+  view.dataset.v36='1';
+  view.dataset.v35='1';        /* impede a montagem antiga de rodar de novo */
+  view.innerHTML=`
+    <div class="exp2">
+      <div class="exp2-cab">
+        <div class="exp2-tit">
+          <h2>Exportar</h2>
+          <span id="expTag"></span>
+        </div>
+        <div class="exp2-dica">A prévia mostra o resultado antes de baixar.</div>
+      </div>
+      <div class="exp2-corpo">
+        <div class="exp2-lado">
+          <div class="exp2-bloco">
+            <div class="exp2-rot">O que exportar</div>
+            <div class="exp2-escopo" id="expEscopo"></div>
+            <div class="exp2-pgs" id="expPaginas"></div>
+          </div>
+          <div class="exp2-bloco">
+            <div class="exp2-rot">Formato</div>
+            <div class="exp2-fmts" id="expFormatos"></div>
+          </div>
+        </div>
+        <div class="exp2-previa" id="expPrevia"></div>
+      </div>
+    </div>`;
+  ligarTelaExportacao();
+}
+function ligarTelaExportacao(){
+  renderEscopo();
+  renderFormatos();
+  renderPrevia();
+  religarBotoesExport();
+}
+function renderEscopo(){
+  const cx=$('#expEscopo'); if(!cx) return;
+  const paginas=listaPaginas();
+  const varias=paginas.length>1;
+  const ops=[
+    {id:'atual',     ico:'▣', t:'Página aberta'},
+    {id:'todas',     ico:'▤', t:'Todas juntas'},
+    {id:'separadas', ico:'⧉', t:'Uma por arquivo'},
+    {id:'selecao',   ico:'☑', t:'Escolher'}
+  ];
+  cx.innerHTML=ops.map(o=>`
+    <button class="exp2-op ${escopoExp.modo===o.id?'on':''}" data-esc="${o.id}"
+      ${!varias&&o.id!=='atual'?'disabled':''}
+      title="${esc({atual:'Apenas a página em que você está',
+        todas:'Um arquivo com todas as páginas empilhadas',
+        separadas:'Um arquivo para cada página',
+        selecao:'Selecionar quais páginas entram'}[o.id])}">
+      <span>${o.ico}</span>${esc(o.t)}</button>`).join('')
+    + (varias?'':'<div class="exp2-nota">Uma página só. Crie páginas na barra inferior da modelagem.</div>');
+  $$('#expEscopo [data-esc]').forEach(b=>b.onclick=()=>{
+    if(b.disabled) return;
+    escopoExp.modo=b.dataset.esc;
+    if(escopoExp.modo==='selecao' && !Object.keys(escopoExp.selecao).length){
+      listaPaginas().forEach(p=>{ if(!p.vazia) escopoExp.selecao[p.i]=true; });
+    }
+    renderEscopo(); renderPrevia();
+  });
+  renderListaPaginas();
+  atualizarTagEscopo();
+}
+function renderListaPaginas(){
+  const cx=$('#expPaginas'); if(!cx) return;
+  if(escopoExp.modo!=='selecao'){ cx.innerHTML=''; cx.classList.remove('show'); return; }
+  const paginas=listaPaginas();
+  cx.classList.add('show');
+  const n=paginas.filter(p=>escopoExp.selecao[p.i]).length;
+  cx.innerHTML=`
+    <div class="exp2-pgcab">
+      <button data-sel="todas">Todas</button>
+      <button data-sel="nenhuma">Nenhuma</button>
+      <span>${n}/${paginas.length}</span>
+    </div>
+    <div class="exp2-pglista">
+      ${paginas.map(p=>`
+        <label class="exp2-pg ${p.vazia?'vazia':''}">
+          <input type="checkbox" data-pg="${p.i}" ${escopoExp.selecao[p.i]?'checked':''} ${p.vazia?'disabled':''}>
+          <span class="exp2-pgn">${esc(p.nome)}</span>
+          <span class="exp2-pgq">${p.vazia?'—':p.nodes+p.pools}</span>
+        </label>`).join('')}
+    </div>`;
+  $$('#expPaginas [data-pg]').forEach(ch=>ch.onchange=()=>{
+    const i=+ch.dataset.pg;
+    if(ch.checked) escopoExp.selecao[i]=true; else delete escopoExp.selecao[i];
+    renderListaPaginas(); renderPrevia(); atualizarTagEscopo();
+  });
+  $$('#expPaginas [data-sel]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.sel==='todas') paginas.forEach(p=>{ if(!p.vazia) escopoExp.selecao[p.i]=true; });
+    else escopoExp.selecao={};
+    renderListaPaginas(); renderPrevia(); atualizarTagEscopo();
+  });
+}
+function atualizarTagEscopo(){
+  const t=$('#expTag'); if(!t) return;
+  const p=paginasDoEscopo();
+  const arq = escopoExp.modo==='separadas' && p.length>1 ? p.length : 1;
+  t.textContent=`${p.length} página${p.length>1?'s':''} · ${arq} arquivo${arq>1?'s':''}`;
+}
+function renderFormatos(){
+  const cx=$('#expFormatos'); if(!cx) return;
+  cx.innerHTML=FORMATOS_EXP.map(f=>`
+    <button class="exp2-fmt ${previaFormato===f.id?'on':''}" data-fmt="${f.id}" title="${esc(f.desc)}">
+      <b>${f.ext.toUpperCase()}</b><span>${esc(f.nome)}</span></button>`).join('');
+  $$('#expFormatos [data-fmt]').forEach(b=>b.onclick=()=>{
+    previaFormato=b.dataset.fmt;
+    renderFormatos(); renderPrevia();
+  });
+}
+function renderPrevia(){
+  const cx=$('#expPrevia');
+  if(!cx) return;
+  const paginas=paginasDoEscopo();
+  const fmt=FORMATOS_EXP.find(f=>f.id===previaFormato)||FORMATOS_EXP[0];
+  const varias=paginas.length>1;
+  const unificado = varias && (escopoExp.modo==='todas'||escopoExp.modo==='selecao');
+  let corpo='';
+  try{
+    if(fmt.id==='vbpm') corpo=previaProjeto(paginas);
+    else if(fmt.visual) corpo=previaVisual(paginas, unificado, fmt);
+    else if(fmt.id==='csv') corpo=previaCSV(paginas);
+    else if(fmt.id==='pptx') corpo=previaSlides(paginas, unificado);
+    else if(fmt.id==='html') corpo=previaHTML(paginas, unificado);
+    else corpo=previaTexto(paginas, fmt);
+  }catch(e){ corpo=`<div class="prev-erro">Prévia indisponível: ${esc(e.message)}</div>`; }
+  const arq = escopoExp.modo==='separadas' && varias ? paginas.length : 1;
+  cx.innerHTML=`
+    <div class="exp2-pcab">
+      <b>${esc(fmt.nome)}</b>
+      <span class="exp2-pext">.${fmt.ext}</span>
+      <span class="exp2-pinfo">${arq>1?`${arq} arquivos`:'1 arquivo'}</span>
+      <button class="btn primary sm" id="prevBaixar">⤓ Exportar</button>
+    </div>
+    <div class="exp2-pcorpo">${corpo}</div>
+    <div class="exp2-prod">${esc(fmt.desc)}</div>`;
+  const b=$('#prevBaixar');
+  if(b) b.onclick=()=>exportar(fmt.id);
+}
+
+/* =========================================================================
+   5) O LEITOR, COM LAYOUT ORGANIZADO
+   ========================================================================= */
+function montarTelaLeitor(){
+  const view=$('#view-leitor');
+  if(!view || view.dataset.v36) return;
+  view.dataset.v36='1';
+  const antigo=view.innerHTML;
+  /* preserva o que existia, mas reorganiza a apresentação */
+  view.innerHTML=`
+    <div class="imp2">
+      <div class="imp2-cab">
+        <h2>Abrir arquivo</h2>
+        <span>Nada é enviado para fora — a leitura acontece no seu navegador.</span>
+      </div>
+      <div class="imp2-corpo">
+        <div class="imp2-esq">
+          <div class="imp2-drop" id="dropzone2">
+            <div class="imp2-ico">⤒</div>
+            <b>Arraste o arquivo aqui</b>
+            <span>ou clique para escolher</span>
+            <div class="imp2-tipos">
+              <span title="Projeto do C-Floxer">.vbpm</span>
+              <span title="BPMN 2.0">.bpmn</span>
+              <span title="Lista de etapas">.xlsx</span>
+              <span title="Lista de etapas">.csv</span>
+              <span title="Visio">.vsdx</span>
+              <span title="Visio XML">.vdx</span>
+            </div>
+          </div>
+          <div class="imp2-modelos" id="imp2Modelos"></div>
+        </div>
+        <div class="imp2-dir" id="imp2Info"></div>
+      </div>
+      <div id="impOriginal" style="display:none">${antigo}</div>
+    </div>`;
+  ligarTelaLeitor();
+}
+function ligarTelaLeitor(){
+  const dz=$('#dropzone2');
+  const fi=$('#fileInput');
+  if(dz){
+    dz.onclick=()=>{ if(fi) fi.click(); };
+    dz.addEventListener('dragover',e=>{ e.preventDefault(); dz.classList.add('sobre'); });
+    dz.addEventListener('dragleave',()=>dz.classList.remove('sobre'));
+    dz.addEventListener('drop',e=>{
+      e.preventDefault(); dz.classList.remove('sobre');
+      const f=e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if(f && typeof importarArquivo==='function') importarArquivo(f);
+    });
+  }
+  renderModelosImp();
+  renderInfoImp();
+}
+function renderModelosImp(){
+  const cx=$('#imp2Modelos'); if(!cx) return;
+  cx.innerHTML=`
+    <div class="imp2-bloco">
+      <div class="imp2-rot">▤ Vindo de uma planilha</div>
+      <p>Uma linha por etapa. Baixe o modelo, preencha e traga de volta.</p>
+      <div class="imp2-bts">
+        <button class="btn primary sm" id="imp2Xlsx">⤓ Modelo Excel</button>
+        <button class="btn sm" id="imp2Csv">⤓ Modelo CSV</button>
+        <button class="btn sm" id="imp2Ajuda">? Como preencher</button>
+      </div>
+    </div>
+    <div class="imp2-bloco">
+      <div class="imp2-rot">◈ Vindo do Visio ou Lucidchart</div>
+      <p>No Visio, salve como <b>.vsdx</b>. No Lucidchart, exporte como <b>CSV</b>.</p>
+      <div class="imp2-bts">
+        <button class="btn sm" id="imp2Onde">? Onde fica a exportação</button>
+      </div>
+    </div>`;
+  const g=id=>$('#'+id);
+  if(g('imp2Xlsx')) g('imp2Xlsx').onclick=()=>baixarModeloLista('xlsx');
+  if(g('imp2Csv')) g('imp2Csv').onclick=()=>baixarModeloLista('csv');
+  if(g('imp2Ajuda')) g('imp2Ajuda').onclick=modalComoPreencher;
+  if(g('imp2Onde')) g('imp2Onde').onclick=modalComoExportar;
+}
+/* painel à direita: mostra o que está aberto agora */
+function renderInfoImp(){
+  const cx=$('#imp2Info'); if(!cx) return;
+  garantirPaginas();
+  const paginas=listaPaginas();
+  const temAlgo=paginas.some(p=>!p.vazia);
+  if(!temAlgo){
+    cx.innerHTML=`<div class="imp2-vazio">
+      <div class="imp2-vico">◇</div>
+      <b>Nenhum desenho aberto</b>
+      <span>Traga um arquivo ao lado, ou comece um novo pelo menu <b>Arquivo → Novo</b>.</span>
+    </div>`;
+    return;
+  }
+  const k=kpisProjeto(paginas.filter(p=>!p.vazia));
+  cx.innerHTML=`
+    <div class="imp2-atual">
+      <div class="imp2-rot">Aberto agora</div>
+      <div class="imp2-nome">${esc(model.meta.nome||'Sem nome')}</div>
+      <div class="imp2-meta">${[model.meta.area,model.meta.tipo,
+        model.meta.versao?'v'+model.meta.versao:''].filter(Boolean).map(esc).join(' · ')}</div>
+      <div class="imp2-kpi">
+        ${[[k.paginas,'Páginas'],[k.atividades,'Atividades'],[k.decisoes,'Decisões'],
+           [k.executores,'Executores']].map(([v,r])=>
+          `<div><b>${v}</b><span>${r}</span></div>`).join('')}
+      </div>
+      <div class="imp2-rot" style="margin-top:14px">Páginas</div>
+      <div class="imp2-pgs">
+        ${paginas.map((p,j)=>`
+          <div class="imp2-pg ${p.atual?'on':''}" data-irpg="${p.i}">
+            <span class="imp2-pgn">${j+1}</span>
+            <span class="imp2-pgnm">${esc(p.nome)}</span>
+            <span class="imp2-pgq">${p.vazia?'vazia':p.nodes+p.pools+' elem.'}</span>
+          </div>`).join('')}
+      </div>
+      <div class="imp2-acoes">
+        <button class="btn sm" onclick="irPara('modelar')">◈ Ir para o desenho</button>
+        <button class="btn sm" onclick="irPara('exportar')">⤓ Exportar</button>
+      </div>
+    </div>`;
+  $$('#imp2Info [data-irpg]').forEach(el=>el.onclick=()=>{
+    carregarPagina(+el.dataset.irpg);
+    irPara('modelar');
+  });
+}
+
+/* =========================================================================
+   6) ESTILOS — dimensionados para 1366×768
+   ========================================================================= */
+(function(){
+  const css=`
+  /* ---------- exportar ---------- */
+  .exp2{max-width:1240px;margin:0 auto;padding:14px 20px 20px}
+  .exp2-cab{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+  .exp2-tit{display:flex;align-items:baseline;gap:10px}
+  .exp2-tit h2{margin:0;font-size:16px;font-weight:800}
+  .exp2-tit span{font-size:11px;font-weight:700;color:var(--acao);background:var(--musgo-0);
+    border:1px solid var(--line);border-radius:14px;padding:3px 10px;white-space:nowrap}
+  .exp2-dica{font-size:11.5px;color:var(--txt3);margin-left:auto}
+  .exp2-corpo{display:grid;grid-template-columns:296px 1fr;gap:14px;align-items:start}
+  .exp2-lado{display:flex;flex-direction:column;gap:10px}
+  .exp2-bloco{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 12px}
+  .exp2-rot{font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+    color:var(--txt3);margin-bottom:8px}
+  .exp2-escopo{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  .exp2-op{display:flex;align-items:center;gap:6px;border:1px solid var(--line2);background:#fff;
+    border-radius:8px;padding:8px 9px;cursor:pointer;font-size:11px;font-weight:600;
+    color:var(--txt2);text-align:left;transition:.12s;line-height:1.25}
+  .exp2-op span{font-size:12px;flex:0 0 auto;opacity:.7}
+  .exp2-op:hover:not(:disabled){border-color:var(--acao);color:var(--acao)}
+  .exp2-op.on{background:var(--acao);border-color:var(--acao);color:#fff}
+  .exp2-op.on span{opacity:1}
+  .exp2-op:disabled{opacity:.4;cursor:not-allowed}
+  .exp2-nota{grid-column:1/-1;font-size:10.5px;color:var(--txt3);line-height:1.45;
+    background:var(--musgo-0);border-radius:7px;padding:7px 9px;margin-top:5px}
+  .exp2-pgs{display:none;margin-top:9px;border-top:1px solid var(--line);padding-top:8px}
+  .exp2-pgs.show{display:block}
+  .exp2-pgcab{display:flex;align-items:center;gap:5px;margin-bottom:5px}
+  .exp2-pgcab button{border:1px solid var(--line2);background:#fff;border-radius:6px;
+    padding:2px 8px;cursor:pointer;font-size:10px;font-weight:700;color:var(--txt2)}
+  .exp2-pgcab button:hover{border-color:var(--acao);color:var(--acao)}
+  .exp2-pgcab span{margin-left:auto;font-size:10px;color:var(--txt3);font-weight:700}
+  .exp2-pglista{max-height:150px;overflow-y:auto}
+  .exp2-pg{display:flex;align-items:center;gap:7px;padding:4px 3px;font-size:11px;cursor:pointer;border-radius:5px}
+  .exp2-pg:hover{background:var(--musgo-0)}
+  .exp2-pg.vazia{opacity:.45;cursor:not-allowed}
+  .exp2-pgn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .exp2-pgq{font-size:9.5px;color:var(--txt3);font-weight:700}
+  .exp2-fmts{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  .exp2-fmt{display:flex;align-items:center;gap:6px;border:1px solid var(--line2);background:#fff;
+    border-radius:8px;padding:7px 8px;cursor:pointer;text-align:left;transition:.12s;min-width:0}
+  .exp2-fmt:hover{border-color:var(--acao)}
+  .exp2-fmt.on{border-color:var(--acao);background:var(--musgo-0);box-shadow:inset 0 0 0 1px var(--acao)}
+  .exp2-fmt b{font-size:8px;font-weight:800;letter-spacing:.3px;background:var(--acao);color:#fff;
+    border-radius:4px;padding:2px 5px;flex:0 0 auto}
+  .exp2-fmt span{font-size:10.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .exp2-previa{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    display:flex;flex-direction:column;min-height:0}
+  .exp2-pcab{display:flex;align-items:center;gap:9px;padding:9px 12px;background:var(--musgo-0);
+    border-bottom:1px solid var(--line)}
+  .exp2-pcab b{font-size:12.5px}
+  .exp2-pext{font-family:Consolas,monospace;font-size:10px;font-weight:800;background:var(--acao);
+    color:#fff;border-radius:5px;padding:2px 7px}
+  .exp2-pinfo{font-size:10.5px;color:var(--txt3);font-weight:700;margin-left:auto;
+    margin-right:8px;white-space:nowrap}
+  .exp2-pcab .btn{flex:0 0 auto;white-space:nowrap}
+  .exp2-pcorpo{padding:12px;background:#F7F9F8;overflow:auto;
+    height:calc(100vh - 300px);min-height:280px;max-height:520px}
+  .exp2-prod{padding:8px 12px;border-top:1px solid var(--line);font-size:10.5px;color:var(--txt3)}
+  /* prévias internas, mais compactas */
+  .prev-folha{background:#fff;border:1px solid var(--line);border-radius:7px;padding:9px;
+    box-shadow:0 1px 6px rgba(35,48,41,.06)}
+  .prev-grade{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .prev-card-d{max-height:120px}
+  .prev-slides{grid-template-columns:1fr 1fr 1fr}
+  .prev-slide{padding:10px 9px}
+  .prev-slide-t{font-size:10.5px}
+  /* ---------- leitor ---------- */
+  .imp2{max-width:1240px;margin:0 auto;padding:14px 20px 20px}
+  .imp2-cab{display:flex;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+  .imp2-cab h2{margin:0;font-size:16px;font-weight:800}
+  .imp2-cab span{font-size:11.5px;color:var(--txt3)}
+  .imp2-corpo{display:grid;grid-template-columns:1fr 330px;gap:14px;align-items:start}
+  .imp2-esq{display:flex;flex-direction:column;gap:10px}
+  .imp2-drop{border:2px dashed var(--line2);border-radius:12px;padding:30px 20px;text-align:center;
+    cursor:pointer;background:var(--panel);transition:.15s}
+  .imp2-drop:hover,.imp2-drop.sobre{border-color:var(--acao);background:var(--musgo-0)}
+  .imp2-ico{font-size:30px;color:var(--musgo-4);margin-bottom:6px}
+  .imp2-drop b{display:block;font-size:14px;margin-bottom:2px}
+  .imp2-drop>span{font-size:11.5px;color:var(--txt3)}
+  .imp2-tipos{display:flex;gap:5px;flex-wrap:wrap;justify-content:center;margin-top:12px}
+  .imp2-tipos span{font-family:Consolas,monospace;font-size:10px;font-weight:700;
+    background:var(--musgo-0);border:1px solid var(--line);border-radius:5px;padding:3px 7px;color:var(--txt2)}
+  .imp2-modelos{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .imp2-bloco{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 13px}
+  .imp2-rot{font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+    color:var(--txt3);margin-bottom:6px}
+  .imp2-bloco p{margin:0 0 9px;font-size:11.3px;color:var(--txt2);line-height:1.5}
+  .imp2-bts{display:flex;gap:5px;flex-wrap:wrap}
+  .imp2-dir{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .imp2-vazio{text-align:center;padding:30px 12px}
+  .imp2-vico{font-size:30px;color:var(--musgo-3);margin-bottom:8px}
+  .imp2-vazio b{display:block;font-size:13px;margin-bottom:5px}
+  .imp2-vazio span{font-size:11.5px;color:var(--txt3);line-height:1.55}
+  .imp2-nome{font-size:15px;font-weight:800;line-height:1.3;margin-bottom:3px}
+  .imp2-meta{font-size:11px;color:var(--txt3);margin-bottom:12px}
+  .imp2-kpi{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .imp2-kpi div{background:var(--musgo-0);border-radius:8px;padding:8px 10px}
+  .imp2-kpi b{display:block;font-size:17px;color:var(--acao);line-height:1.15}
+  .imp2-kpi span{font-size:8.5px;text-transform:uppercase;letter-spacing:.4px;
+    color:var(--txt3);font-weight:800}
+  .imp2-pgs{display:flex;flex-direction:column;gap:3px;max-height:180px;overflow-y:auto}
+  .imp2-pg{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;
+    cursor:pointer;font-size:11.5px;background:#fff;border:1px solid var(--line)}
+  .imp2-pg:hover{border-color:var(--acao);background:var(--musgo-0)}
+  .imp2-pg.on{border-color:var(--acao);background:var(--musgo-0)}
+  .imp2-pgn{width:18px;height:18px;border-radius:5px;background:var(--musgo-1);color:var(--acao);
+    display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:800;flex:0 0 18px}
+  .imp2-pg.on .imp2-pgn{background:var(--acao);color:#fff}
+  .imp2-pgnm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+  .imp2-pgq{font-size:9.5px;color:var(--txt3);font-weight:700;white-space:nowrap}
+  .imp2-acoes{display:flex;gap:6px;margin-top:12px}
+  .imp2-acoes .btn{flex:1}
+  /* ---------- telas menores ---------- */
+  @media(max-width:1200px){
+    .exp2-corpo{grid-template-columns:260px 1fr}
+    .imp2-corpo{grid-template-columns:1fr 300px}
+  }
+  @media(max-width:960px){
+    .exp2-corpo,.imp2-corpo{grid-template-columns:1fr}
+    .exp2-pcorpo{height:auto;max-height:400px}
+    .imp2-modelos{grid-template-columns:1fr}
+  }
+  @media(max-height:800px){
+    .exp2-pcorpo{max-height:420px}
+    .imp2-drop{padding:22px 18px}
+  }`;
+  const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st);
+})();
+
+/* =========================================================================
+   7) ARRANQUE
+   ========================================================================= */
+function initV36(){
+  montarTelaExportacao();
+  montarTelaLeitor();
+  religarBotoesExport();
+  /* ao trocar de área, remonta o que for necessário */
+  const _ir=irPara;
+  if(typeof _ir==='function' && !_ir._v36){
+    const novo=function(v){
+      const r=_ir.apply(this, arguments);
+      setTimeout(()=>{
+        try{
+          if(v==='exportar'){ montarTelaExportacao(); ligarTelaExportacao(); }
+          if(v==='leitor'){ montarTelaLeitor(); renderInfoImp(); }
+        }catch(e){}
+      }, 40);
+      return r;
+    };
+    novo._v36=true;
+    irPara=novo;
+  }
+  /* ao trocar de página, os painéis acompanham */
+  const _cp=carregarPagina;
+  if(typeof _cp==='function' && !_cp._v36){
+    const novo=function(i){
+      const r=_cp.apply(this, arguments);
+      try{ if($('#expPrevia')&&$('#expPrevia').innerHTML) { renderEscopo(); renderPrevia(); } }catch(e){}
+      try{ if($('#imp2Info')&&$('#imp2Info').innerHTML) renderInfoImp(); }catch(e){}
+      return r;
+    };
+    novo._v36=true;
+    carregarPagina=novo;
+  }
+}
+(function(){
+  function arrancar(){ try{ initV36(); }catch(e){} }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>setTimeout(arrancar,520));
+  else setTimeout(arrancar,520);
 })();
 
 </script>
